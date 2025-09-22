@@ -37,6 +37,8 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
   const [minZoom, setMinZoom] = React.useState(1)
   const [maxZoom, setMaxZoom] = React.useState(1)
   const [zoom, setZoom] = React.useState<number | undefined>(undefined)
+  const [hasTorch, setHasTorch] = React.useState(false)
+  const [torch, setTorch] = React.useState(false)
   
   // Edge detection for auto-capture
   const [isDetectingEdges, setIsDetectingEdges] = React.useState(false)
@@ -90,6 +92,13 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
               setHasZoom(false)
               setZoom(undefined)
             }
+            if (caps && typeof caps.torch !== 'undefined') {
+              setHasTorch(!!(caps.torch))
+              setTorch(false)
+            } else {
+              setHasTorch(false)
+              setTorch(false)
+            }
           } catch {}
         }
       } catch (e: any) {
@@ -140,6 +149,30 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       try { await (track as any).applyConstraints?.({ advanced: [{ zoom: value }] }) } catch {}
     }
   }, [])
+
+  const applyTorch = React.useCallback(async (on: boolean) => {
+    setTorch(on)
+    const track = trackRef.current
+    if (!track) return
+    try {
+      await (track as any).applyConstraints?.({ advanced: [{ torch: on }] })
+    } catch {}
+  }, [])
+
+  const formatDeviceLabel = (d: MediaDeviceInfo, i: number) => {
+    const raw = d.label || ''
+    const L = raw.toLowerCase()
+    const isFront = /(front|user|facetime|true\s*depth|selfie)/i.test(raw)
+    const isBack = /(back|rear|environment|outward)/i.test(raw) || !isFront
+    let lens = ''
+    if (/ultra[-\s]?wide/.test(L) || /ultra/.test(L)) lens = 'Ultra‑Wide'
+    else if (/tele/.test(L)) lens = 'Tele'
+    else if (/wide/.test(L)) lens = 'Wide'
+    else if (/macro/.test(L)) lens = 'Macro'
+    const side = isFront ? 'Front' : 'Back'
+    if (!raw) return `Camera ${i + 1}`
+    return lens ? `${side} (${lens})` : side
+  }
 
   const startEdgeDetection = () => {
     setIsDetectingEdges(true)
@@ -700,13 +733,13 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
         <option value="">Auto camera</option>
         {devices.map((d, i) => (
           <option key={d.deviceId || i} value={d.deviceId}>
-            {d.label || `Camera ${i + 1}`}
+            {formatDeviceLabel(d, i)}
           </option>
         ))}
       </select>
 
       {hasZoom && typeof zoom === 'number' && (
-        <div className="hidden md:flex items-center gap-2">
+        <div className="flex items-center gap-2">
           <label className="text-xs text-gray-600">Zoom</label>
           <input
             type="range"
@@ -715,8 +748,21 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
             step={0.1}
             value={zoom}
             onChange={(e) => applyZoom(parseFloat(e.target.value))}
+            className="w-24 sm:w-32 md:w-40"
           />
         </div>
+      )}
+
+      {hasTorch && (
+        <button
+          onClick={() => applyTorch(!torch)}
+          className={`px-3 py-2 rounded-lg border ${torch ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-gray-300 bg-white text-gray-800'} hover:bg-gray-50`}
+          aria-pressed={torch}
+          aria-label="Toggle flashlight"
+          type="button"
+        >
+          Torch
+        </button>
       )}
 
       <button
