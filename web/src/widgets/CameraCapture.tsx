@@ -246,31 +246,43 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
     
     // Extract date (multiple formats)
     const datePatterns = [
-      /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/,
-      /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/,
-      /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i
+      /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/g,
+      /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/g,
+      /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/gi
     ]
     
     for (const pattern of datePatterns) {
       const match = ocrText.match(pattern)
-      if (match) {
-        // Parse and normalize date
+      if (match && match[0]) {
+        // Use the first match and parse it properly
+        const matchText = match[0]
         let year, month, day
-        if (match[1].length === 4) {
-          [, year, month, day] = match
-        } else if (isNaN(Number(match[1]))) {
+        
+        if (pattern.toString().includes('Jan|Feb')) {
           // Month name format
-          const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-          month = String(monthNames.findIndex(m => m.toLowerCase() === match[1].toLowerCase().slice(0, 3)) + 1)
-          day = match[2]
-          year = match[3]
+          const monthNameMatch = matchText.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i)
+          if (monthNameMatch) {
+            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            month = String(monthNames.findIndex(m => m.toLowerCase() === monthNameMatch[1].toLowerCase().slice(0, 3)) + 1)
+            day = monthNameMatch[2]
+            year = monthNameMatch[3]
+          }
         } else {
-          [, month, day, year] = match
-          if (year.length === 2) year = '20' + year
+          const parts = matchText.match(/(\d{1,4})[-\/](\d{1,2})[-\/](\d{1,4})/)
+          if (parts) {
+            if (parts[1].length === 4) {
+              [, year, month, day] = parts
+            } else {
+              [, month, day, year] = parts
+              if (year.length === 2) year = '20' + year
+            }
+          }
         }
         
-        data.date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
-        break
+        if (year && month && day) {
+          data.date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
+          break
+        }
       }
     }
     
@@ -287,15 +299,16 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
     }
     
     // Extract total amount (look for largest amount or "TOTAL")
+    // Fixed: All patterns now have global flag
     const amountPatterns = [
-      /TOTAL[\s:]*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2}))/i,
-      /AMOUNT[\s:]*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2}))/i,
+      /TOTAL[\s:]*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/gi,
+      /AMOUNT[\s:]*\$?\s*(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/gi,
       /\$\s*(\d{1,3}(?:,\d{3})*\.\d{2})/g
     ]
     
     let amounts: number[] = []
     for (const pattern of amountPatterns) {
-      const matches = ocrText.matchAll(pattern)
+      const matches = Array.from(ocrText.matchAll(pattern))
       for (const match of matches) {
         const amount = parseFloat(match[1].replace(/,/g, ''))
         if (!isNaN(amount)) amounts.push(amount)
