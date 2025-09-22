@@ -29,6 +29,27 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // Cache-First for Supabase Storage receipts images (signed/public URLs)
+  if (url.href.includes('/storage/v1/object') && url.href.includes('/receipts/')) {
+    event.respondWith(
+      caches.open(CACHE_NAME).then(async (cache) => {
+        const cached = await cache.match(req)
+        if (cached) return cached
+        try {
+          const res = await fetch(req)
+          // Opaque or ok responses can be cached
+          if (res && (res.ok || res.type === 'opaque')) {
+            cache.put(req, res.clone())
+          }
+          return res
+        } catch (e) {
+          return cached || Promise.reject(e)
+        }
+      })
+    )
+    return;
+  }
+
   // For navigation requests, use cache-first fallback to index.html
   if (req.mode === 'navigate') {
     event.respondWith(

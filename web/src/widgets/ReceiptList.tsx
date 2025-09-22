@@ -1,6 +1,7 @@
 import React from 'react'
 import { callEdgeFunctionJson } from '../shared/api'
 import { useAuth } from '../shared/AuthContext'
+import Lightbox from '../components/Lightbox'
 
 interface Props {
   scope: 'officer' | 'manager'
@@ -301,12 +302,7 @@ export default function ReceiptList({ scope }: Props) {
 
       {/* Lightbox */}
       {lightboxUrl && (
-        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center" onClick={() => setLightboxUrl(null)}>
-          <div className="absolute top-3 right-3">
-            <button className="px-3 py-1.5 rounded bg-white text-gray-800" onClick={() => setLightboxUrl(null)}>Close</button>
-          </div>
-          <img src={lightboxUrl} alt="Receipt" className="max-h-[85vh] max-w-[95vw] object-contain" />
-        </div>
+        <Lightbox src={lightboxUrl} onClose={() => setLightboxUrl(null)} />
       )}
       {loading && <div className="mt-2 text-sm text-gray-500">Loading...</div>}
       <div className="mt-2 text-xs text-gray-500">Total: {count}</div>
