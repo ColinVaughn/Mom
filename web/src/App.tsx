@@ -10,12 +10,25 @@ import ForgotPassword from './pages/auth/ForgotPassword'
 import ResetPassword from './pages/auth/ResetPassword'
 
 function Home() {
+  const { session } = useAuth()
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
       <div className="max-w-xl w-full">
         <h1 className="text-2xl font-semibold mb-4">Gas Receipt Tracking System</h1>
-        <p className="text-gray-600">App bootstrapped. Please sign in to continue.</p>
-        <a className="mt-4 inline-block text-blue-600 underline" href="/login">Go to Login</a>
+        {!session ? (
+          <>
+            <p className="text-gray-600">App bootstrapped. Please sign in to continue.</p>
+            <a className="mt-4 inline-block text-blue-600 underline" href="/login">Go to Login</a>
+          </>
+        ) : (
+          <>
+            <p className="text-gray-600">You're signed in. Choose a dashboard to continue.</p>
+            <div className="mt-4 flex items-center gap-4">
+              <a className="text-blue-600 underline" href="/officer">Go to Officer</a>
+              <a className="text-blue-600 underline" href="/manager">Go to Manager</a>
+            </div>
+          </>
+        )}
       </div>
     </div>
   )
