@@ -19,7 +19,10 @@ export default function NavBar() {
         </div>
         <div className="text-sm">
           {!session ? (
-            <Link to="/login" className="text-blue-600">Login</Link>
+            <div className="flex items-center gap-3">
+              <Link to="/login" className="text-blue-600">Login</Link>
+              <Link to="/register" className="text-blue-600">Register</Link>
+            </div>
           ) : (
             <button onClick={signOut} className="text-red-600">Sign Out</button>
           )}

@@ -6,6 +6,12 @@ interface AuthContextState {
   session: Session | null
   user: User | null
   loading: boolean
+  // password-based auth
+  signInWithPassword: (email: string, password: string) => Promise<void>
+  signUpWithPassword: (name: string, email: string, password: string) => Promise<void>
+  sendPasswordReset: (email: string, redirectTo?: string) => Promise<void>
+  updatePassword: (newPassword: string) => Promise<void>
+  // legacy helper (not used by default UI anymore)
   signInWithEmailOtp: (email: string) => Promise<void>
   signOut: () => Promise<void>
 }
@@ -23,7 +29,11 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setLoading(false)
     }
     init()
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, sess) => {
+    const { data: sub } = supabase.auth.onAuthStateChange(async (event, sess) => {
+      // Handle password recovery links
+      if (event === 'PASSWORD_RECOVERY') {
+        // session may not be established yet; after user sets new password we will sign them in
+      }
       setSession(sess)
     })
     return () => {
@@ -35,6 +45,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     session,
     user: session?.user ?? null,
     loading,
+    signInWithPassword: async (email: string, password: string) => {
+      const { error } = await supabase.auth.signInWithPassword({ email, password })
+      if (error) throw error
+    },
+    signUpWithPassword: async (name: string, email: string, password: string) => {
+      const { error } = await supabase.auth.signUp({ email, password, options: { data: { name } } })
+      if (error) throw error
+    },
+    sendPasswordReset: async (email: string, redirectTo?: string) => {
+      const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: redirectTo || `${window.location.origin}/reset-password` })
+      if (error) throw error
+    },
+    updatePassword: async (newPassword: string) => {
+      const { error } = await supabase.auth.updateUser({ password: newPassword })
+      if (error) throw error
+    },
+    // still expose OTP for backward-compat
     signInWithEmailOtp: async (email: string) => {
       await supabase.auth.signInWithOtp({ email })
     },

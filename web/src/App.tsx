@@ -4,6 +4,10 @@ import NavBar from './components/NavBar'
 import OfficerDashboard from './pages/OfficerDashboard'
 import ManagerDashboard from './pages/ManagerDashboard'
 import { Protected } from './shared/Protected'
+import Login from './pages/auth/Login'
+import Register from './pages/auth/Register'
+import ForgotPassword from './pages/auth/ForgotPassword'
+import ResetPassword from './pages/auth/ResetPassword'
 
 function Home() {
   return (
@@ -13,26 +17,6 @@ function Home() {
         <p className="text-gray-600">App bootstrapped. Please sign in to continue.</p>
         <a className="mt-4 inline-block text-blue-600 underline" href="/login">Go to Login</a>
       </div>
-    </div>
-  )
-}
-
-function Login() {
-  const { signInWithEmailOtp } = useAuth()
-  const onSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    const form = e.target as HTMLFormElement
-    const email = (form.elements.namedItem('email') as HTMLInputElement).value
-    await signInWithEmailOtp(email)
-    alert('Check your email for the magic link.')
-  }
-  return (
-    <div className="min-h-screen flex items-center justify-center p-6">
-      <form onSubmit={onSubmit} className="max-w-sm w-full space-y-3">
-        <h1 className="text-xl font-semibold">Login</h1>
-        <input name="email" type="email" placeholder="Email" required className="border rounded w-full p-2" />
-        <button className="bg-blue-600 text-white px-4 py-2 rounded w-full">Send Magic Link</button>
-      </form>
     </div>
   )
 }
@@ -51,6 +35,9 @@ export default function App() {
         <Routes>
           <Route path="/" element={<Home />} />
           <Route path="/login" element={!session ? <Login /> : <Navigate to="/" replace />} />
+          <Route path="/register" element={!session ? <Register /> : <Navigate to="/" replace />} />
+          <Route path="/forgot-password" element={!session ? <ForgotPassword /> : <Navigate to="/" replace />} />
+          <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/officer" element={<Protected><OfficerDashboard /></Protected>} />
           <Route path="/manager" element={<Protected roles={['manager']}><ManagerDashboard /></Protected>} />
           <Route path="*" element={<Navigate to="/" replace />} />

@@ -1,3 +1,5 @@
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+declare const Deno: any;
 // deno-lint-ignore-file no-explicit-any
 import { corsHeaders, errorJson, okJson } from '../_shared/cors.ts'
 import { getAdminClient, getUserClient } from '../_shared/supabaseAdmin.ts'
@@ -25,7 +27,7 @@ async function requireManager(req: Request) {
 }
 
 async function handleCreate(body: any) {
-  const { email, name, role = 'officer', sendInvite = true } = body || {}
+  const { email, name, role = 'officer', sendInvite = true, password } = body || {}
   if (!email || !name) return errorJson('email and name are required', 400)
   if (!['officer', 'manager'].includes(role)) return errorJson('invalid role', 400)
   const admin = getAdminClient()
@@ -33,7 +35,8 @@ async function handleCreate(body: any) {
   // Create user in auth
   const { data: created, error: createErr } = await admin.auth.admin.createUser({
     email,
-    email_confirm: false,
+    email_confirm: Boolean(password) || false,
+    password: password || undefined,
     user_metadata: { name },
   })
   if (createErr || !created?.user) return errorJson(createErr?.message || 'Failed to create user', 400)
@@ -47,7 +50,8 @@ async function handleCreate(body: any) {
     .eq('id', uid)
   if (upErr) return errorJson('Failed to set role for new user: ' + upErr.message, 400)
 
-  if (sendInvite) {
+  // If a password was provided, skip magic link invite
+  if (!password && sendInvite) {
     // Send magic link invite by generating a link and emailing via Postmark
     const { data: linkData, error: linkErr } = await admin.auth.admin.generateLink({
       type: 'magiclink',
@@ -78,7 +82,7 @@ async function handleCreate(body: any) {
     return okJson({ user_id: uid, invited: true })
   }
 
-  return okJson({ user_id: uid })
+  return okJson({ user_id: uid, password_set: Boolean(password) })
 }
 
 async function handleSetRole(body: any) {
