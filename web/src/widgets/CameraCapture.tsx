@@ -1,5 +1,4 @@
 import React from 'react'
-import Tesseract from 'tesseract.js'
 
 interface Props {
   onCapture: (blob: Blob, guesses?: { date?: string; total?: string }) => void
@@ -16,6 +15,9 @@ export default function CameraCapture({ onCapture }: Props) {
     let stream: MediaStream | null = null
     (async () => {
       try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('Camera is not available in this browser or context')
+        }
         stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
         if (videoRef.current) {
           videoRef.current.srcObject = stream
@@ -32,9 +34,11 @@ export default function CameraCapture({ onCapture }: Props) {
   }, [])
 
   const capture = async () => {
-    const video = videoRef.current!
-    const canvas = canvasRef.current!
-    const ctx = canvas.getContext('2d')!
+    const video = videoRef.current
+    const canvas = canvasRef.current
+    if (!video || !canvas) { setError('Camera not ready'); return }
+    const ctx = canvas.getContext('2d')
+    if (!ctx) { setError('Canvas 2D not supported'); return }
     const w = video.videoWidth
     const h = video.videoHeight
     canvas.width = w
@@ -45,7 +49,7 @@ export default function CameraCapture({ onCapture }: Props) {
     const trimmed = trimWhiteBorders(canvas)
 
     setProcessing(true)
-    const blob = await new Promise<Blob>(resolve => trimmed.toBlob(b => resolve(b!), 'image/jpeg', 0.92))
+    const blob = await canvasToBlob(trimmed, 'image/jpeg', 0.92)
 
     try {
       const guesses = await ocrGuess(trimmed)
@@ -123,8 +127,15 @@ function trimWhiteBorders(src: HTMLCanvasElement): HTMLCanvasElement {
 }
 
 async function ocrGuess(canvas: HTMLCanvasElement): Promise<{ date?: string; total?: string }> {
-  const blob = await new Promise<Blob>(r => canvas.toBlob(b => r(b!), 'image/png'))
-  const { data } = await Tesseract.recognize(blob, 'eng', { logger: () => {} })
+  const blob = await canvasToBlob(canvas, 'image/png')
+  let data: any = { text: '' }
+  try {
+    const { default: Tesseract } = await import('tesseract.js')
+    const res = await Tesseract.recognize(blob, 'eng', { logger: () => {} })
+    data = res
+  } catch {
+    // OCR is best-effort; swallow errors and return empty guesses
+  }
   const text = data.text || ''
   // Try to find an amount like 12.34 preceded by $ optionally
   const amountMatch = text.match(/\$?\s*(\d{1,3}(?:,\d{3})*|\d+)(?:[\.,](\d{2}))\b/)
@@ -146,4 +157,16 @@ async function ocrGuess(canvas: HTMLCanvasElement): Promise<{ date?: string; tot
     date = `${y}-${m}-${d}`
   }
   return { date, total }
+}
+
+// Cross-browser canvas to Blob, with fallback if toBlob is missing or returns null
+async function canvasToBlob(canvas: HTMLCanvasElement, type = 'image/png', quality?: number): Promise<Blob> {
+  if (typeof canvas.toBlob === 'function') {
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(b => resolve(b), type, quality))
+    if (blob) return blob
+  }
+  // Fallback via dataURL
+  const dataUrl = canvas.toDataURL(type, quality)
+  const res = await fetch(dataUrl)
+  return await res.blob()
 }
