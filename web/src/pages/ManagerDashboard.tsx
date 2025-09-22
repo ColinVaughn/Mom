@@ -73,6 +73,12 @@ function UsersPanel() {
   const [name, setName] = React.useState('')
   const [role, setRole] = React.useState<'officer'|'manager'>('officer')
   const [loading, setLoading] = React.useState(true)
+  // Card mapping state
+  const [selectedForCards, setSelectedForCards] = React.useState<string>('')
+  const [cards, setCards] = React.useState<string[]>([])
+  const [cardInput, setCardInput] = React.useState('')
+  const [cardsLoading, setCardsLoading] = React.useState(false)
+  const [cardError, setCardError] = React.useState<string | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -85,6 +91,20 @@ function UsersPanel() {
   }, [session?.access_token])
 
   React.useEffect(() => { load() }, [load])
+
+  const loadCards = React.useCallback(async () => {
+    if (!selectedForCards) { setCards([]); return }
+    setCardsLoading(true)
+    setCardError(null)
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_cards?select=card_last4&user_id=eq.${selectedForCards}`,
+      { headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) } })
+    if (!res.ok) { setCards([]); setCardsLoading(false); return }
+    const rows = await res.json()
+    setCards((rows || []).map((r: any) => r.card_last4))
+    setCardsLoading(false)
+  }, [selectedForCards, session?.access_token])
+
+  React.useEffect(() => { loadCards() }, [loadCards])
 
   const createUser = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -114,6 +134,40 @@ function UsersPanel() {
       body: JSON.stringify({ user_id }),
     })
     await load()
+  }
+
+  const addCard = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setCardError(null)
+    const last4 = cardInput.trim()
+    if (!selectedForCards) { setCardError('Select an officer first.'); return }
+    if (!/^[0-9]{4}$/.test(last4)) { setCardError('Enter a 4-digit last4.'); return }
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_cards?on_conflict=card_last4`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+        Prefer: 'resolution=merge-duplicates',
+      },
+      body: JSON.stringify([{ card_last4: last4, user_id: selectedForCards }]),
+    })
+    if (!res.ok) {
+      const t = await res.text()
+      setCardError(t || 'Failed to save')
+      return
+    }
+    setCardInput('')
+    await loadCards()
+  }
+
+  const removeCard = async (last4: string) => {
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_cards?card_last4=eq.${last4}`, {
+      method: 'DELETE',
+      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}) },
+    })
+    if (!res.ok) return
+    await loadCards()
   }
 
   return (
@@ -160,6 +214,53 @@ function UsersPanel() {
           </table>
         </div>
         {loading && <div className="mt-2 text-sm text-gray-500">Loading...</div>}
+      </div>
+      <div className="md:col-span-2">
+        <div className="mt-6 border rounded p-3 bg-white">
+          <h3 className="font-semibold mb-2">Card Last4 Mapping</h3>
+          <div className="flex flex-wrap items-center gap-2 mb-3">
+            <label className="text-sm text-gray-600">Officer</label>
+            <select value={selectedForCards} onChange={e=>setSelectedForCards(e.target.value)} className="border rounded p-2">
+              <option value="">Select officer</option>
+              {users.filter(u=>u.role==='officer').map(u => (
+                <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+              ))}
+            </select>
+          </div>
+          {selectedForCards ? (
+            <div className="space-y-3">
+              <form onSubmit={addCard} className="flex items-center gap-2">
+                <input value={cardInput} onChange={e=>setCardInput(e.target.value)} inputMode="numeric" maxLength={4} placeholder="1234" className="border rounded p-2 w-28" />
+                <button className="px-3 py-2 rounded bg-blue-600 text-white">Add</button>
+                {cardError && <div className="text-sm text-red-600 ml-2">{cardError}</div>}
+              </form>
+              <div className="overflow-x-auto border rounded">
+                <table className="min-w-full text-sm">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="p-2 text-left">Card Last4</th>
+                      <th className="p-2 text-left">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {cards.map(last4 => (
+                      <tr key={last4} className="border-t">
+                        <td className="p-2 font-mono">{last4}</td>
+                        <td className="p-2"><button onClick={()=>removeCard(last4)} className="text-red-600">Remove</button></td>
+                      </tr>
+                    ))}
+                    {!cardsLoading && cards.length === 0 && (
+                      <tr><td colSpan={2} className="p-3 text-center text-gray-500">No cards mapped</td></tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+              {cardsLoading && <div className="text-sm text-gray-500">Loading cards...</div>}
+            </div>
+          ) : (
+            <div className="text-sm text-gray-600">Select an officer to manage card mappings.</div>
+          )}
+        </div>
       </div>
     </div>
   )
