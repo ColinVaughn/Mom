@@ -5,6 +5,7 @@ import { supabase } from '../shared/supabaseClient'
 import { useAuth } from '../shared/AuthContext'
 import ReceiptList from '../widgets/ReceiptList'
 import BulkZipUpload from '../widgets/BulkZipUpload'
+import { enqueueUpload } from '../shared/offlineQueue'
 
 export default function OfficerDashboard() {
   const [tab, setTab] = React.useState<'upload'|'history'>('upload')
@@ -100,14 +101,43 @@ function UploadPanel() {
       if (cardLast4) fd.append('card_last4', cardLast4)
       if (ocrConfidence) fd.append('ocr_confidence', ocrConfidence)
       if (ocrRaw) fd.append('ocr', JSON.stringify(ocrRaw))
-      const res = await callEdgeFunctionMultipart('upload-receipt', fd)
-      setMessage('Uploaded successfully')
+      if (!navigator.onLine) {
+        await enqueueUpload(fd)
+        setMessage('You are offline. The receipt was saved and will upload automatically when you are online.')
+      } else {
+        const res = await callEdgeFunctionMultipart('upload-receipt', fd)
+        setMessage('Uploaded successfully')
+      }
       setFile(null)
       setDate('')
       setTotal('')
       setTimeText(''); setGallons(''); setPricePerGallon(''); setFuelGrade(''); setStation(''); setStationAddress(''); setPaymentMethod(''); setCardLast4(''); setOcrConfidence(''); setOcrRaw(null)
     } catch (err:any) {
-      setMessage(err.message || 'Upload failed')
+      // If network failure, queue offline
+      try {
+        if (err?.name === 'TypeError' || !navigator.onLine) {
+          const fd = new FormData()
+          if (file) fd.append('file', file)
+          fd.append('date', date)
+          fd.append('total', total)
+          if (timeText) fd.append('time_text', timeText)
+          if (gallons) fd.append('gallons', gallons)
+          if (pricePerGallon) fd.append('price_per_gallon', pricePerGallon)
+          if (fuelGrade) fd.append('fuel_grade', fuelGrade)
+          if (station) fd.append('station', station)
+          if (stationAddress) fd.append('station_address', stationAddress)
+          if (paymentMethod) fd.append('payment_method', paymentMethod)
+          if (cardLast4) fd.append('card_last4', cardLast4)
+          if (ocrConfidence) fd.append('ocr_confidence', ocrConfidence)
+          if (ocrRaw) fd.append('ocr', JSON.stringify(ocrRaw))
+          await enqueueUpload(fd)
+          setMessage('Network issue. Saved offline and will upload automatically later.')
+        } else {
+          setMessage(err.message || 'Upload failed')
+        }
+      } catch {
+        setMessage(err?.message || 'Upload failed')
+      }
     } finally {
       setBusy(false)
     }

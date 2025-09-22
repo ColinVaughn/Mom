@@ -1,5 +1,6 @@
 import { Link, useLocation } from 'react-router-dom'
 import { useAuth } from '../shared/AuthContext'
+import InstallPrompt from './InstallPrompt'
 
 export default function NavBar() {
   const { session, signOut } = useAuth()
@@ -17,7 +18,8 @@ export default function NavBar() {
             </nav>
           )}
         </div>
-        <div className="text-sm">
+        <div className="text-sm flex items-center gap-3">
+          <InstallPrompt />
           {!session ? (
             <div className="flex items-center gap-3">
               <Link to="/login" className="text-blue-600">Login</Link>

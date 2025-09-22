@@ -459,6 +459,27 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
           <div className="absolute top-2 right-2 bg-white px-2 py-1 rounded shadow">
             Confidence: {Math.round(extractedData.confidence || 0)}%
           </div>
+          <div className="grid grid-cols-2 gap-3 mt-3">
+            <div>
+              <label className="block text-sm text-gray-600">Date</label>
+              <input
+                type="date"
+                value={extractedData.date || ''}
+                onChange={e=>setExtractedData(d=>({ ...(d||{}), date: e.target.value }))}
+                className="border rounded-lg w-full p-2"
+              />
+            </div>
+            <div>
+              <label className="block text-sm text-gray-600">Total ($)</label>
+              <input
+                type="number"
+                step="0.01"
+                value={extractedData.total ?? ''}
+                onChange={e=>setExtractedData(d=>({ ...(d||{}), total: e.target.value }))}
+                className="border rounded-lg w-full p-2"
+              />
+            </div>
+          </div>
         </div>
         
         <div className="bg-gray-50 p-4 rounded">
@@ -566,7 +587,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
         )}
       </div>
 
-    <div className="flex items-center gap-2">
+    <div className="sticky bottom-0 z-10 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-t p-2 rounded-b-xl flex items-center gap-2">
       <button
         onClick={capture}
         className="flex-1 inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg font-medium disabled:bg-gray-400 hover:bg-blue-700"

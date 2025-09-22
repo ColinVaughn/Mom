@@ -25,6 +25,7 @@ export default function ReceiptList({ scope }: Props) {
   const [count, setCount] = React.useState<number>(0)
   const [loading, setLoading] = React.useState(false)
   const [users, setUsers] = React.useState<Array<{ id: string; name: string }>>([])
+  const [lightboxUrl, setLightboxUrl] = React.useState<string | null>(null)
   // Manager-customizable columns
   const COLS = React.useMemo(() => (
     [
@@ -177,7 +178,17 @@ export default function ReceiptList({ scope }: Props) {
 
       {/* Mobile cards */}
       <div className="md:hidden space-y-3">
-        {receipts.map(r => (
+        {loading && Array.from({ length: 3 }).map((_,i) => (
+          <div key={`sk-${i}`} className="bg-white rounded-lg border shadow-sm p-3 animate-pulse">
+            <div className="h-4 bg-gray-200 rounded w-32" />
+            <div className="mt-2 h-6 bg-gray-200 rounded w-48" />
+            <div className="mt-3 grid grid-cols-2 gap-3">
+              <div className="h-4 bg-gray-200 rounded" />
+              <div className="h-4 bg-gray-200 rounded" />
+            </div>
+          </div>
+        ))}
+        {!loading && receipts.map(r => (
           <div key={r.id} className="bg-white rounded-lg border shadow-sm p-3">
             <div className="flex items-center justify-between">
               <div>
@@ -209,7 +220,7 @@ export default function ReceiptList({ scope }: Props) {
               )}
               {visible.image && (
                 r.signed_url ? (
-                  <a className="ml-auto inline-flex items-center px-3 py-1.5 text-sm rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50" href={r.signed_url} target="_blank" rel="noreferrer">View</a>
+                  <button type="button" onClick={() => setLightboxUrl(r.signed_url!)} className="ml-auto inline-flex items-center px-3 py-1.5 text-sm rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50">View</button>
                 ) : (
                   <span className="ml-auto text-xs text-gray-400">No image</span>
                 )
@@ -244,7 +255,14 @@ export default function ReceiptList({ scope }: Props) {
             </tr>
           </thead>
           <tbody>
-            {receipts.map(r => (
+            {loading && Array.from({ length: 6 }).map((_,i) => (
+              <tr key={`skl-${i}`} className="border-t animate-pulse">
+                <td className="p-2" colSpan={Object.values(visible).filter(Boolean).length}>
+                  <div className="h-4 bg-gray-200 rounded w-2/3" />
+                </td>
+              </tr>
+            ))}
+            {!loading && receipts.map(r => (
               <tr key={r.id} className="border-t">
                 {visible.officer && scope==='manager' && <td className="p-2">{r.user_name}</td>}
                 {visible.date && <td className="p-2">{r.date}</td>}
@@ -269,7 +287,7 @@ export default function ReceiptList({ scope }: Props) {
                 )}
                 {visible.image && (
                   <td className="p-2">
-                    {r.signed_url ? <a className="text-blue-600 underline" href={r.signed_url} target="_blank" rel="noreferrer">View</a> : <span className="text-gray-500">—</span>}
+                    {r.signed_url ? <button type="button" onClick={() => setLightboxUrl(r.signed_url!)} className="text-blue-600 underline">View</button> : <span className="text-gray-500">—</span>}
                   </td>
                 )}
               </tr>
@@ -280,6 +298,16 @@ export default function ReceiptList({ scope }: Props) {
           </tbody>
         </table>
       </div>
+
+      {/* Lightbox */}
+      {lightboxUrl && (
+        <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center" onClick={() => setLightboxUrl(null)}>
+          <div className="absolute top-3 right-3">
+            <button className="px-3 py-1.5 rounded bg-white text-gray-800" onClick={() => setLightboxUrl(null)}>Close</button>
+          </div>
+          <img src={lightboxUrl} alt="Receipt" className="max-h-[85vh] max-w-[95vw] object-contain" />
+        </div>
+      )}
       {loading && <div className="mt-2 text-sm text-gray-500">Loading...</div>}
       <div className="mt-2 text-xs text-gray-500">Total: {count}</div>
     </div>
