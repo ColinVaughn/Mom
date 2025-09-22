@@ -30,6 +30,13 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
   const [captureMode, setCaptureMode] = React.useState<'auto' | 'manual'>('manual')
   const [previewImage, setPreviewImage] = React.useState<string | null>(null)
   const [extractedData, setExtractedData] = React.useState<GasReceiptData | null>(null)
+  const [devices, setDevices] = React.useState<MediaDeviceInfo[]>([])
+  const [selectedDeviceId, setSelectedDeviceId] = React.useState<string | null>(null)
+  const trackRef = React.useRef<MediaStreamTrack | null>(null)
+  const [hasZoom, setHasZoom] = React.useState(false)
+  const [minZoom, setMinZoom] = React.useState(1)
+  const [maxZoom, setMaxZoom] = React.useState(1)
+  const [zoom, setZoom] = React.useState<number | undefined>(undefined)
   
   // Edge detection for auto-capture
   const [isDetectingEdges, setIsDetectingEdges] = React.useState(false)
@@ -45,14 +52,9 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
         }
         
         // Try to get the best camera settings for document capture
-        const constraints = {
-          video: {
-            facingMode: 'environment',
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
-            aspectRatio: { ideal: 16/9 }
-          }
-        }
+        const base: any = { width: { ideal: 1920 }, height: { ideal: 1080 }, aspectRatio: { ideal: 16/9 } }
+        const video: any = selectedDeviceId ? { ...base, deviceId: { exact: selectedDeviceId } } : { ...base, facingMode: { ideal: 'environment' } }
+        const constraints = { video }
         
         stream = await navigator.mediaDevices.getUserMedia(constraints)
         
@@ -65,6 +67,30 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
           if (captureMode === 'auto') {
             startEdgeDetection()
           }
+          // Enumerate available video devices after permission
+          try {
+            const list = await navigator.mediaDevices.enumerateDevices()
+            setDevices(list.filter(d => d.kind === 'videoinput'))
+          } catch {}
+
+          // Inspect track capabilities (zoom, etc.)
+          try {
+            trackRef.current = stream.getVideoTracks()[0] || null
+            const caps: any = trackRef.current?.getCapabilities?.()
+            const settings: any = trackRef.current?.getSettings?.()
+            if (caps && typeof caps.zoom === 'object') {
+              setHasZoom(true)
+              const mn = typeof caps.zoom.min === 'number' ? caps.zoom.min : 1
+              const mx = typeof caps.zoom.max === 'number' ? caps.zoom.max : 1
+              setMinZoom(mn)
+              setMaxZoom(mx)
+              const start = typeof settings?.zoom === 'number' ? settings.zoom : mn
+              setZoom(start)
+            } else {
+              setHasZoom(false)
+              setZoom(undefined)
+            }
+          } catch {}
         }
       } catch (e: any) {
         const errorMsg = e?.message || 'Cannot access camera'
@@ -81,7 +107,39 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       }
       stream?.getTracks().forEach(track => track.stop())
     }
-  }, [captureMode, onError])
+  }, [captureMode, onError, selectedDeviceId])
+
+  // Refresh device list when hardware changes
+  React.useEffect(() => {
+    const handler = async () => {
+      try {
+        const list = await navigator.mediaDevices.enumerateDevices()
+        setDevices(list.filter(d => d.kind === 'videoinput'))
+      } catch {}
+    }
+    navigator.mediaDevices?.addEventListener?.('devicechange', handler)
+    return () => navigator.mediaDevices?.removeEventListener?.('devicechange', handler)
+  }, [])
+
+  // Load persisted camera device
+  React.useEffect(() => {
+    try {
+      const saved = localStorage.getItem('camera_device_id')
+      if (saved) setSelectedDeviceId(saved)
+    } catch {}
+  }, [])
+
+  const applyZoom = React.useCallback(async (value: number) => {
+    setZoom(value)
+    const track = trackRef.current
+    if (!track) return
+    try {
+      // Try simple constraint first
+      await (track as any).applyConstraints?.({ zoom: value })
+    } catch {
+      try { await (track as any).applyConstraints?.({ advanced: [{ zoom: value }] }) } catch {}
+    }
+  }, [])
 
   const startEdgeDetection = () => {
     setIsDetectingEdges(true)
@@ -632,6 +690,34 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
         )}
         <span>{processing ? 'Processing…' : 'Capture Receipt'}</span>
       </button>
+
+      <select
+        value={selectedDeviceId || ''}
+        onChange={(e) => { const id = e.target.value || null; setSelectedDeviceId(id); try { id ? localStorage.setItem('camera_device_id', id) : localStorage.removeItem('camera_device_id') } catch {} }}
+        className="px-3 py-2 rounded-lg border bg-white text-gray-800 max-w-[50%]"
+        aria-label="Select camera"
+      >
+        <option value="">Auto camera</option>
+        {devices.map((d, i) => (
+          <option key={d.deviceId || i} value={d.deviceId}>
+            {d.label || `Camera ${i + 1}`}
+          </option>
+        ))}
+      </select>
+
+      {hasZoom && typeof zoom === 'number' && (
+        <div className="hidden md:flex items-center gap-2">
+          <label className="text-xs text-gray-600">Zoom</label>
+          <input
+            type="range"
+            min={minZoom}
+            max={maxZoom}
+            step={0.1}
+            value={zoom}
+            onChange={(e) => applyZoom(parseFloat(e.target.value))}
+          />
+        </div>
+      )}
 
       <button
         onClick={() => setCaptureMode(captureMode === 'auto' ? 'manual' : 'auto')}
