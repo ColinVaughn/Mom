@@ -41,12 +41,19 @@ function UploadPanel() {
   const [ocrRaw, setOcrRaw] = React.useState<any>(null)
   const [busy, setBusy] = React.useState(false)
   const [message, setMessage] = React.useState<string>('')
+  const isValidISODate = (s: string) => {
+    const m = s.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!m) return false
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3])
+    const dt = new Date(y, mo - 1, d)
+    return dt.getFullYear() === y && (dt.getMonth() + 1) === mo && dt.getDate() === d
+  }
 
   const onCaptured = async (blob: Blob, data?: any) => {
     const f = new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' })
     setFile(f)
     // Prime inputs from extracted data
-    if (data?.date) setDate(data.date)
+    if (data?.date && isValidISODate(data.date)) setDate(data.date)
     if (data?.total) setTotal(String(data.total))
     if (data?.time) setTimeText(data.time)
     if (data?.gallons != null) setGallons(String(data.gallons))
@@ -69,6 +76,10 @@ function UploadPanel() {
     e.preventDefault()
     if (!file || !date || !total) {
       setMessage('Please provide image, date and total')
+      return
+    }
+    if (!isValidISODate(date)) {
+      setMessage('Invalid date. Please choose a valid date (YYYY-MM-DD).')
       return
     }
     setBusy(true)

@@ -39,6 +39,13 @@ Deno.serve(async (req) => {
 
     if (!file) return errorJson('file is required', 400, origin)
     if (!date) return errorJson('date is required (YYYY-MM-DD)', 400, origin)
+    // Validate ISO date yyyy-mm-dd
+    const m = date.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+    if (!m) return errorJson('invalid date format (YYYY-MM-DD)', 400, origin)
+    const y = Number(m[1]), mo = Number(m[2]), d = Number(m[3])
+    const dt = new Date(y, mo - 1, d)
+    const isValid = dt.getFullYear() === y && (dt.getMonth() + 1) === mo && dt.getDate() === d
+    if (!isValid) return errorJson('invalid calendar date', 400, origin)
     if (!totalStr) return errorJson('total is required', 400, origin)
 
     const total = Number(totalStr)

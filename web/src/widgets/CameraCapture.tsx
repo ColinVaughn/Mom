@@ -243,47 +243,46 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
     
     // Enhanced pattern matching for gas receipts
     const data: GasReceiptData = { confidence }
-    
-    // Extract date (multiple formats)
-    const datePatterns = [
-      /(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/g,
-      /(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/g,
-      /(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/gi
-    ]
-    
-    for (const pattern of datePatterns) {
-      const match = ocrText.match(pattern)
-      if (match && match[0]) {
-        // Use the first match and parse it properly
-        const matchText = match[0]
-        let year, month, day
-        
-        if (pattern.toString().includes('Jan|Feb')) {
-          // Month name format
-          const monthNameMatch = matchText.match(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/i)
-          if (monthNameMatch) {
-            const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
-            month = String(monthNames.findIndex(m => m.toLowerCase() === monthNameMatch[1].toLowerCase().slice(0, 3)) + 1)
-            day = monthNameMatch[2]
-            year = monthNameMatch[3]
-          }
-        } else {
-          const parts = matchText.match(/(\d{1,4})[-\/](\d{1,2})[-\/](\d{1,4})/)
-          if (parts) {
-            if (parts[1].length === 4) {
-              [, year, month, day] = parts
-            } else {
-              [, month, day, year] = parts
-              if (year.length === 2) year = '20' + year
-            }
-          }
-        }
-        
-        if (year && month && day) {
-          data.date = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`
-          break
-        }
-      }
+
+    // Extract date (robust): collect candidates, validate, and normalize YYYY-MM-DD
+    const candidates: string[] = []
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const validYMD = (y: number, m: number, d: number) => {
+      if (!(y >= 1900 && y <= 2100)) return false
+      if (!(m >= 1 && m <= 12)) return false
+      if (!(d >= 1 && d <= 31)) return false
+      const dt = new Date(y, m - 1, d)
+      return dt.getFullYear() === y && dt.getMonth() === m - 1 && dt.getDate() === d
+    }
+
+    // mm/dd/yyyy or m/d/yy
+    for (const m of ocrText.matchAll(/(\d{1,2})[-\/](\d{1,2})[-\/](\d{2,4})/g)) {
+      let mm = parseInt(m[1], 10)
+      let dd = parseInt(m[2], 10)
+      let yy = parseInt(m[3], 10)
+      if (m[3].length === 2) yy = 2000 + yy
+      if (validYMD(yy, mm, dd)) candidates.push(`${yy}-${pad(mm)}-${pad(dd)}`)
+    }
+
+    // yyyy-mm-dd
+    for (const m of ocrText.matchAll(/(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})/g)) {
+      const yy = parseInt(m[1], 10)
+      const mm = parseInt(m[2], 10)
+      const dd = parseInt(m[3], 10)
+      if (validYMD(yy, mm, dd)) candidates.push(`${yy}-${pad(mm)}-${pad(dd)}`)
+    }
+
+    // Month name formats
+    for (const m of ocrText.matchAll(/(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+(\d{1,2}),?\s+(\d{4})/gi)) {
+      const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+      const mm = monthNames.findIndex(x => x.toLowerCase() === m[1].toLowerCase().slice(0, 3)) + 1
+      const dd = parseInt(m[2], 10)
+      const yy = parseInt(m[3], 10)
+      if (validYMD(yy, mm, dd)) candidates.push(`${yy}-${pad(mm)}-${pad(dd)}`)
+    }
+
+    if (candidates.length > 0) {
+      data.date = candidates[0]
     }
     
     // Extract time
@@ -320,14 +319,15 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       data.total = Math.max(...amounts).toFixed(2)
     }
     
-    // Extract gallons
-    const gallonMatch = ocrText.match(/(\d+\.?\d*)\s*(?:GAL|GALLON|GALLONS)/i)
+    // Extract gallons (support label-first or value-first)
+    let gallonMatch = ocrText.match(/(?:GALLONS?|GAL)\s*[:=]?\s*(\d+(?:\.\d+)?)/i)
+    if (!gallonMatch) gallonMatch = ocrText.match(/(\d+(?:\.\d+)?)\s*(?:GAL|GALLON|GALLONS)/i)
     if (gallonMatch) {
       data.gallons = gallonMatch[1]
     }
     
-    // Extract price per gallon
-    const ppgMatch = ocrText.match(/(?:PPG|PRICE\/GAL|PER\s*GAL)[\s:]*\$?\s*(\d+\.\d{2,3})/i)
+    // Extract price per gallon (handle PRICE/G, PRICE/GAL, PER GAL, etc.)
+    const ppgMatch = ocrText.match(/(?:PPG|PRICE\/?G(?:AL)?|PRICE\s*PER\s*G(?:AL)?|PER\s*G(?:AL)?)[\s:]*\$?\s*(\d+(?:\.\d{1,3})?)/i)
     if (ppgMatch) {
       data.pricePerGallon = ppgMatch[1]
     } else if (data.total && data.gallons) {
@@ -335,8 +335,8 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       data.pricePerGallon = (parseFloat(data.total) / parseFloat(data.gallons)).toFixed(3)
     }
     
-    // Extract fuel grade
-    const gradeMatch = ocrText.match(/(REGULAR|PLUS|PREMIUM|DIESEL|UNLEADED|SUPER|MID-?GRADE)/i)
+    // Extract fuel grade (include UNL/UNLD shortcuts)
+    const gradeMatch = ocrText.match(/(REGULAR|PLUS|PREMIUM|DIESEL|UNLEADED|UNL|UNLD|SUPER|MID-?GRADE)/i)
     if (gradeMatch) {
       data.fuelGrade = gradeMatch[1].toUpperCase()
     }
@@ -354,6 +354,15 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       }
     }
     
+    // Extract station address (simple street pattern, best-effort)
+    if (!data.stationAddress) {
+      const lines = ocrText.split(/\r?\n/)
+      for (const line of lines) {
+        const m = line.match(/\b(\d{1,6})\s+([A-Za-z0-9.'\-\s]+?)\s+(Rd|Road|St|Street|Ave|Avenue|Blvd|Lane|Ln|Dr|Drive|Hwy|Highway|Pkwy|Parkway|Ct|Court)\b.*$/i)
+        if (m) { data.stationAddress = line.trim(); break }
+      }
+    }
+
     // Extract payment method
     const paymentMatch = ocrText.match(/(CASH|CREDIT|DEBIT|VISA|MASTERCARD|AMEX|DISCOVER|APPLE\s*PAY|GOOGLE\s*PAY)/i)
     if (paymentMatch) {
@@ -595,12 +604,16 @@ async function canvasToBlob(
           if (blob) {
             resolve(blob)
           } else {
-            // Fallback to data URL
-            canvas.toDataURL(type, quality)
-              .then(dataUrl => fetch(dataUrl))
-              .then(res => res.blob())
-              .then(resolve)
-              .catch(reject)
+            // Fallback to data URL (toDataURL returns a string)
+            try {
+              const dataUrl = canvas.toDataURL(type, quality)
+              fetch(dataUrl)
+                .then(res => res.blob())
+                .then(resolve)
+                .catch(reject)
+            } catch (err) {
+              reject(err)
+            }
           }
         },
         type,
