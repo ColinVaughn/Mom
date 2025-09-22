@@ -13,6 +13,8 @@ interface AuthContextState {
   updatePassword: (newPassword: string) => Promise<void>
   // legacy helper (not used by default UI anymore)
   signInWithEmailOtp: (email: string) => Promise<void>
+  // OAuth
+  signInWithMicrosoft: () => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -64,6 +66,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     // still expose OTP for backward-compat
     signInWithEmailOtp: async (email: string) => {
       await supabase.auth.signInWithOtp({ email })
+    },
+    signInWithMicrosoft: async () => {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'azure',
+        options: {
+          redirectTo: `${window.location.origin}/`,
+        },
+      })
+      if (error) throw error
     },
     signOut: async () => {
       await supabase.auth.signOut()
