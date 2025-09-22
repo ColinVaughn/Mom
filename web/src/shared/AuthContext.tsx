@@ -14,7 +14,7 @@ interface AuthContextState {
   // legacy helper (not used by default UI anymore)
   signInWithEmailOtp: (email: string) => Promise<void>
   // OAuth
-  signInWithMicrosoft: () => Promise<void>
+  signInWithMicrosoft: (loginHint?: string, domainHint?: string) => Promise<void>
   signOut: () => Promise<void>
 }
 
@@ -67,11 +67,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     signInWithEmailOtp: async (email: string) => {
       await supabase.auth.signInWithOtp({ email })
     },
-    signInWithMicrosoft: async () => {
+    signInWithMicrosoft: async (loginHint?: string, domainHint?: string) => {
+      const lh = loginHint || import.meta.env.VITE_AZURE_LOGIN_HINT
+      const dh = domainHint || import.meta.env.VITE_AZURE_DOMAIN_HINT
       const { error } = await supabase.auth.signInWithOAuth({
         provider: 'azure',
         options: {
           redirectTo: `${window.location.origin}/`,
+          queryParams: {
+            ...(lh ? { login_hint: lh } : {}),
+            ...(dh ? { domain_hint: dh } : {}),
+          },
         },
       })
       if (error) throw error

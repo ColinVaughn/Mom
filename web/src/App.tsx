@@ -8,6 +8,7 @@ import Login from './pages/auth/Login'
 import Register from './pages/auth/Register'
 import ForgotPassword from './pages/auth/ForgotPassword'
 import ResetPassword from './pages/auth/ResetPassword'
+import MicrosoftButton from './components/MicrosoftButton'
 
 function Home() {
   const { session } = useAuth()
@@ -19,6 +20,14 @@ function Home() {
           <>
             <p className="text-gray-600">App bootstrapped. Please sign in to continue.</p>
             <a className="mt-4 inline-block text-blue-600 underline" href="/login">Go to Login</a>
+            <div className="flex items-center gap-3 text-gray-500 mt-4">
+              <div className="h-px bg-gray-200 flex-1" />
+              <span className="text-xs">or</span>
+              <div className="h-px bg-gray-200 flex-1" />
+            </div>
+            <div className="mt-2">
+              <MicrosoftButton />
+            </div>
           </>
         ) : (
           <>

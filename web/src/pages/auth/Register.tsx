@@ -1,6 +1,7 @@
 import React from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import { useAuth } from '../../shared/AuthContext'
+import MicrosoftButton from '../../components/MicrosoftButton'
 
 export default function Register() {
   const { signUpWithPassword } = useAuth()
@@ -34,6 +35,12 @@ export default function Register() {
         <input value={email} onChange={e=>setEmail(e.target.value)} name="email" type="email" placeholder="Email" required className="border rounded w-full p-2" />
         <input value={password} onChange={e=>setPassword(e.target.value)} name="password" type="password" placeholder="Password" required className="border rounded w-full p-2" />
         <button disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded w-full">{busy? 'Creating...' : 'Create account'}</button>
+        <div className="flex items-center gap-3 text-gray-500">
+          <div className="h-px bg-gray-200 flex-1" />
+          <span className="text-xs">or</span>
+          <div className="h-px bg-gray-200 flex-1" />
+        </div>
+        <MicrosoftButton text="Sign up with Microsoft" />
         <div className="text-sm text-center">
           <Link className="text-blue-600" to="/login">Back to login</Link>
         </div>
