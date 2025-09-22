@@ -50,6 +50,19 @@ function UploadPanel() {
     return dt.getFullYear() === y && (dt.getMonth() + 1) === mo && dt.getDate() === d
   }
 
+  // Prefill from query params if present (e.g., shared link from Manager calendar)
+  React.useEffect(() => {
+    try {
+      const p = new URLSearchParams(window.location.search)
+      const qDate = p.get('date') || ''
+      const qTotal = p.get('total') || ''
+      const qTime = p.get('time') || ''
+      if (qDate && isValidISODate(qDate)) setDate(qDate)
+      if (qTotal && !Number.isNaN(Number(qTotal))) setTotal(String(Number(qTotal)))
+      if (qTime) setTimeText(qTime)
+    } catch {}
+  }, [])
+
   const onCaptured = async (blob: Blob, data?: any) => {
     const f = new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' })
     setFile(f)

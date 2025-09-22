@@ -192,6 +192,91 @@ function CalendarPanel() {
 
   const label = monthStart.toLocaleDateString(undefined, { year: 'numeric', month: 'long' })
 
+  const fmt = (d: Date) => d.toISOString().slice(0,10)
+  const endOfMonth = (d: Date) => new Date(d.getFullYear(), d.getMonth()+1, 0)
+  const monthFirst = React.useMemo(() => new Date(monthStart.getFullYear(), monthStart.getMonth(), 1), [monthStart])
+  const monthLast = React.useMemo(() => endOfMonth(monthFirst), [monthFirst])
+
+  const officerById = (id: string) => officers.find(o => o.id === id)
+
+  const exportCsv = async () => {
+    if (!selected) return
+    // Fetch receipts and WEX tx to compute missing
+    const [{ receipts }, wexRows] = await Promise.all([
+      (async () => {
+        const { callEdgeFunctionJson } = await import('../shared/api')
+        return callEdgeFunctionJson<any, { receipts: any[] }>('get-receipts', {
+          filters: { user_id: selected, date_from: fmt(monthFirst), date_to: fmt(monthLast), limit: 1000 },
+        })
+      })(),
+      (async () => {
+        const { supabase } = await import('../shared/supabaseClient')
+        const { data: sessionData } = await supabase.auth.getSession()
+        const token = sessionData.session?.access_token
+        const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_transactions?select=transacted_at&user_id=eq.${selected}&transacted_at=gte.${fmt(monthFirst)}&transacted_at=lte.${fmt(monthLast)}`,
+          { headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) } })
+        if (!res.ok) return [] as Array<{ transacted_at: string }>
+        return res.json()
+      })(),
+    ])
+
+    const daily: Record<string, { tx: number; receipts: number; missing: number; flaggedMissing: number }> = {}
+    for (const r of receipts || []) {
+      const key = String(r.date).slice(0,10)
+      if (!daily[key]) daily[key] = { tx: 0, receipts: 0, missing: 0, flaggedMissing: 0 }
+      if (r.status === 'missing') daily[key].flaggedMissing++
+      else daily[key].receipts++
+    }
+    for (const t of wexRows || []) {
+      const key = String(t.transacted_at).slice(0,10)
+      if (!daily[key]) daily[key] = { tx: 0, receipts: 0, missing: 0, flaggedMissing: 0 }
+      daily[key].tx++
+    }
+    for (const key of Object.keys(daily)) {
+      const deficit = Math.max(0, daily[key].tx - daily[key].receipts)
+      daily[key].missing = Math.max(deficit, daily[key].flaggedMissing)
+    }
+
+    const dates: string[] = []
+    for (let d = new Date(monthFirst); d <= monthLast; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+      dates.push(fmt(d))
+    }
+    const rows = [['Date','WEX Tx','Receipts','Missing']]
+    for (const day of dates) {
+      const info = daily[day] || { tx: 0, receipts: 0, missing: 0 }
+      rows.push([day, String(info.tx), String(info.receipts), String(info.missing)])
+    }
+    const csv = rows.map(r => r.map(v => /[",\n]/.test(v) ? '"' + v.replace(/"/g,'""') + '"' : v).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    const name = officerById(selected)?.name?.replace(/\s+/g,'_') || 'officer'
+    a.download = `missing_${name}_${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,'0')}.csv`
+    a.href = URL.createObjectURL(blob)
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
+  const exportPdf = async () => {
+    if (!selected) return
+    const payload = { mode: 'single', filters: { user_id: selected, status: 'missing', date_from: fmt(monthFirst), date_to: fmt(monthLast) } }
+    const { supabase } = await import('../shared/supabaseClient')
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-pdf`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(payload),
+    })
+    if (!res.ok) { alert('PDF export failed'); return }
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    const name = officerById(selected)?.name?.replace(/\s+/g,'_') || 'officer'
+    a.download = `missing_${name}_${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,'0')}.pdf`
+    a.href = URL.createObjectURL(blob)
+    a.click()
+    URL.revokeObjectURL(a.href)
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-2">
@@ -204,6 +289,8 @@ function CalendarPanel() {
           <button onClick={()=>changeMonth(-1)} className="px-3 py-1.5 rounded border">Prev</button>
           <div className="min-w-[10ch] text-center font-medium">{label}</div>
           <button onClick={()=>changeMonth(1)} className="px-3 py-1.5 rounded border">Next</button>
+          <button onClick={exportCsv} className="ml-2 px-3 py-1.5 rounded border border-blue-600 text-blue-700 hover:bg-blue-50">Export CSV</button>
+          <button onClick={exportPdf} className="px-3 py-1.5 rounded border border-gray-800 text-gray-900 hover:bg-gray-50">Missing PDF</button>
         </div>
       </div>
       {selected ? (
