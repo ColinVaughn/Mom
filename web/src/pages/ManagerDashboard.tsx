@@ -92,6 +92,14 @@ function UsersPanel() {
 
   React.useEffect(() => { load() }, [load])
 
+  // When users list changes, auto-select the first officer for convenience
+  React.useEffect(() => {
+    if (!selectedForCards && users.length) {
+      const first = users.find(u => u.role === 'officer')
+      if (first) setSelectedForCards(first.id)
+    }
+  }, [users, selectedForCards])
+
   const loadCards = React.useCallback(async () => {
     if (!selectedForCards) { setCards([]); return }
     setCardsLoading(true)
@@ -226,6 +234,9 @@ function UsersPanel() {
                 <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
               ))}
             </select>
+            {users.filter(u=>u.role==='officer').length === 0 && (
+              <span className="text-sm text-gray-600 ml-2">No officers found. Create one above in "Add User".</span>
+            )}
           </div>
           {selectedForCards ? (
             <div className="space-y-3">
