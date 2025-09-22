@@ -39,6 +39,9 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
   const [zoom, setZoom] = React.useState<number | undefined>(undefined)
   const [hasTorch, setHasTorch] = React.useState(false)
   const [torch, setTorch] = React.useState(false)
+  const zoomApplyTimerRef = React.useRef<number | null>(null)
+  const sampleCanvasRef = React.useRef<HTMLCanvasElement | null>(null)
+  const torchManualOffUntilRef = React.useRef<number>(0)
   
   // Edge detection for auto-capture
   const [isDetectingEdges, setIsDetectingEdges] = React.useState(false)
@@ -138,26 +141,57 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
     } catch {}
   }, [])
 
-  const applyZoom = React.useCallback(async (value: number) => {
-    setZoom(value)
-    const track = trackRef.current
-    if (!track) return
-    try {
-      // Try simple constraint first
-      await (track as any).applyConstraints?.({ zoom: value })
-    } catch {
-      try { await (track as any).applyConstraints?.({ advanced: [{ zoom: value }] }) } catch {}
-    }
-  }, [])
-
+  // Handlers (defined before effects to satisfy TS ordering)
   const applyTorch = React.useCallback(async (on: boolean) => {
     setTorch(on)
     const track = trackRef.current
     if (!track) return
     try {
-      await (track as any).applyConstraints?.({ advanced: [{ torch: on }] })
-    } catch {}
+      // Try simple
+      await (track as any).applyConstraints?.({ torch: on })
+    } catch {
+      try { await (track as any).applyConstraints?.({ advanced: [{ torch: on }] }) } catch {}
+    }
   }, [])
+
+  const scheduleApplyZoom = React.useCallback((value: number) => {
+    setZoom(value)
+    if (zoomApplyTimerRef.current) window.clearTimeout(zoomApplyTimerRef.current)
+    zoomApplyTimerRef.current = window.setTimeout(async () => {
+      const track = trackRef.current
+      if (!track) { zoomApplyTimerRef.current = null; return }
+      try {
+        await (track as any).applyConstraints?.({ zoom: value })
+      } catch {
+        try { await (track as any).applyConstraints?.({ advanced: [{ zoom: value }] }) } catch {}
+      }
+      zoomApplyTimerRef.current = null
+    }, 100) as unknown as number
+  }, [])
+
+  // Auto-enable torch in low light; don't auto-disable. Respect manual off for 2 minutes.
+  React.useEffect(() => {
+    if (!cameraReady || !hasTorch) return
+    const interval = window.setInterval(() => {
+      if (!videoRef.current) return
+      if (Date.now() < torchManualOffUntilRef.current) return
+      try {
+        const video = videoRef.current
+        const w = 96, h = 54
+        let cnv = sampleCanvasRef.current
+        if (!cnv) { cnv = document.createElement('canvas'); cnv.width = w; cnv.height = h; sampleCanvasRef.current = cnv }
+        const ctx = cnv.getContext('2d')
+        if (!ctx) return
+        ctx.drawImage(video, 0, 0, w, h)
+        const { data } = ctx.getImageData(0, 0, w, h)
+        let sum = 0
+        for (let i = 0; i < data.length; i += 4) sum += 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]
+        const avg = sum / (data.length / 4)
+        if (avg < 45 && !torch) applyTorch(true)
+      } catch {}
+    }, 1200)
+    return () => window.clearInterval(interval)
+  }, [cameraReady, hasTorch, torch, applyTorch])
 
   const formatDeviceLabel = (d: MediaDeviceInfo, i: number) => {
     const raw = d.label || ''
@@ -676,7 +710,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 pb-28">
       {error && (
         <div className="bg-red-50 text-red-700 p-3 rounded text-sm">
           {error}
@@ -686,7 +720,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       <div className="relative">
         <video 
           ref={videoRef} 
-          className="w-full rounded border bg-black" 
+          className="w-full rounded border bg-black object-contain h-[60svh] sm:h-[70vh]"
           playsInline 
           muted 
         />
@@ -708,7 +742,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
         )}
       </div>
 
-    <div className="sticky bottom-0 z-10 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-t p-2 rounded-b-xl flex items-center gap-2">
+    <div className="fixed inset-x-0 bottom-0 z-20 bg-white/85 backdrop-blur supports-[backdrop-filter]:bg-white/60 border-t p-2 flex flex-wrap items-center gap-2" style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}>
       <button
         onClick={capture}
         className="flex-1 inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg font-medium disabled:bg-gray-400 hover:bg-blue-700"
@@ -727,7 +761,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
       <select
         value={selectedDeviceId || ''}
         onChange={(e) => { const id = e.target.value || null; setSelectedDeviceId(id); try { id ? localStorage.setItem('camera_device_id', id) : localStorage.removeItem('camera_device_id') } catch {} }}
-        className="px-3 py-2 rounded-lg border bg-white text-gray-800 max-w-[50%]"
+        className="px-3 py-2 rounded-lg border bg-white text-gray-800 min-w-[9rem] max-w-[55%] sm:max-w-none"
         aria-label="Select camera"
       >
         <option value="">Auto camera</option>
@@ -747,7 +781,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
             max={maxZoom}
             step={0.1}
             value={zoom}
-            onChange={(e) => applyZoom(parseFloat(e.target.value))}
+            onChange={(e) => scheduleApplyZoom(parseFloat(e.target.value))}
             className="w-24 sm:w-32 md:w-40"
           />
         </div>
@@ -755,7 +789,7 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
 
       {hasTorch && (
         <button
-          onClick={() => applyTorch(!torch)}
+          onClick={() => { const next = !torch; if (!next) torchManualOffUntilRef.current = Date.now() + 120000; else torchManualOffUntilRef.current = 0; applyTorch(next) }}
           className={`px-3 py-2 rounded-lg border ${torch ? 'border-amber-500 text-amber-700 bg-amber-50' : 'border-gray-300 bg-white text-gray-800'} hover:bg-gray-50`}
           aria-pressed={torch}
           aria-label="Toggle flashlight"
