@@ -234,6 +234,32 @@ from public.receipts r
 join public.users u on u.id = r.user_id;
 alter view public.receipts_with_user set (security_invoker = true, security_barrier = true);
 
+-- 10) Missing resolutions: managers can acknowledge missing days with a reason
+create table if not exists public.missing_resolutions (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  date date not null,
+  reason text,
+  manager_id uuid not null references public.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique (user_id, date)
+);
+
+alter table public.missing_resolutions enable row level security;
+
+-- Managers can view all; officers can view their own (for transparency)
+drop policy if exists missres_select on public.missing_resolutions;
+create policy missres_select on public.missing_resolutions
+for select to authenticated
+using (public.is_manager(auth.uid()) or user_id = auth.uid());
+
+-- Only managers can insert/update/delete
+drop policy if exists missres_modify on public.missing_resolutions;
+create policy missres_modify on public.missing_resolutions
+for all to authenticated
+using (public.is_manager(auth.uid()))
+with check (public.is_manager(auth.uid()));
+
 -- 8) Policies for wex_cards (manager-only access)
 drop policy if exists wex_cards_select_manager on public.wex_cards;
 create policy wex_cards_select_manager on public.wex_cards

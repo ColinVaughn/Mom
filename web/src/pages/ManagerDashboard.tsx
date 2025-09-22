@@ -172,11 +172,16 @@ function CalendarPanel() {
   const [monthStart, setMonthStart] = React.useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
 
   const load = React.useCallback(async () => {
-    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/user-management`, {
-      headers: { Authorization: `Bearer ${session?.access_token}` },
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/users?select=id,name,email,role&order=created_at.desc`
+    const res = await fetch(url, {
+      headers: {
+        apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
+        ...(session?.access_token ? { Authorization: `Bearer ${session.access_token}` } : {}),
+      },
     })
-    const data = await res.json()
-    const offs = (data.users || []).filter((u: any) => u.role === 'officer')
+    if (!res.ok) { setOfficers([]); return }
+    const rows = await res.json()
+    const offs = (rows || []).filter((u: any) => u.role === 'officer')
     setOfficers(offs)
     if (!selected && offs.length) setSelected(offs[0].id)
   }, [session?.access_token, selected])

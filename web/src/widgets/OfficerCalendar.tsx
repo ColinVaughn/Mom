@@ -15,6 +15,7 @@ type Receipt = {
 interface Props {
   userId: string
   monthStart: Date
+  isManager?: boolean
 }
 
 function fmt(d: Date) {
@@ -25,14 +26,17 @@ function endOfMonth(d: Date) {
   return new Date(d.getFullYear(), d.getMonth()+1, 0)
 }
 
-export default function OfficerCalendar({ userId, monthStart }: Props) {
-  const [map, setMap] = React.useState<Record<string, { all: Receipt[]; missing: number; txCount: number }>>({})
+export default function OfficerCalendar({ userId, monthStart, isManager }: Props) {
+  const [map, setMap] = React.useState<Record<string, { all: Receipt[]; missing: number; txCount: number; resolved?: boolean; resolvedReason?: string }>>({})
   const [loading, setLoading] = React.useState(true)
   const [dayOpen, setDayOpen] = React.useState<string | null>(null)
   const [dayLoading, setDayLoading] = React.useState(false)
   const [dayReceipts, setDayReceipts] = React.useState<Receipt[]>([])
   const [dayTx, setDayTx] = React.useState<Array<{ id?: string; external_id?: string; amount: number; merchant?: string; transacted_at: string }>>([])
   const [lightboxUrl, setLightboxUrl] = React.useState<string | null>(null)
+  const [dayResolved, setDayResolved] = React.useState<{ date: string; reason?: string } | null>(null)
+  const [reasonInput, setReasonInput] = React.useState('')
+  const [refreshKey, setRefreshKey] = React.useState(0)
 
   const first = React.useMemo(() => new Date(monthStart.getFullYear(), monthStart.getMonth(), 1), [monthStart])
   const last = React.useMemo(() => endOfMonth(first), [first])
@@ -50,7 +54,7 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
         },
       })
       if (!alive) return
-      const m: Record<string, { all: Receipt[]; missing: number; txCount: number }> = {}
+      const m: Record<string, { all: Receipt[]; missing: number; txCount: number; resolved?: boolean; resolvedReason?: string }> = {}
       for (const r of res.receipts || []) {
         const key = (r.date as string).slice(0,10)
         if (!m[key]) m[key] = { all: [], missing: 0, txCount: 0 }
@@ -84,6 +88,21 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
           // Use the larger of deficit vs explicitly flagged missing
           m[key].missing = Math.max(m[key].missing, deficit)
         }
+
+        // Fetch any manager resolutions in the range and override missing
+        const resRes = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/missing_resolutions?select=date,reason&user_id=eq.${userId}&date=gte.${fmt(first)}&date=lte.${fmt(last)}`,
+          { headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) } })
+        if (resRes.ok) {
+          const rows: Array<{ date: string; reason?: string }> = await resRes.json()
+          for (const r of rows) {
+            const key = String(r.date).slice(0,10)
+            if (!m[key]) m[key] = { all: [], missing: 0, txCount: 0 }
+            m[key].resolved = true
+            m[key].resolvedReason = r.reason || ''
+            // suppress red highlight
+            m[key].missing = 0
+          }
+        }
       } catch {
         // ignore tx fetch errors; we'll rely on explicit missing entries
       }
@@ -92,7 +111,7 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
       setLoading(false)
     })()
     return () => { alive = false }
-  }, [userId, first, last])
+  }, [userId, first, last, refreshKey])
 
   const openDay = React.useCallback(async (dateStr: string) => {
     setDayOpen(dateStr)
@@ -123,12 +142,27 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
       } else {
         setDayTx([])
       }
+      // Load resolution status for this day
+      const { data: sessionData2 } = await supabase.auth.getSession()
+      const token2 = sessionData2.session?.access_token
+      const resRes = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/missing_resolutions?select=date,reason&user_id=eq.${userId}&date=eq.${dateStr}`,
+        { headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token2 ? { Authorization: `Bearer ${token2}` } : {}) } })
+      if (resRes.ok) {
+        const arr = await resRes.json()
+        if (arr && arr.length) {
+          setDayResolved({ date: dateStr, reason: arr[0].reason })
+          setReasonInput(arr[0].reason || '')
+        } else {
+          setDayResolved(null)
+          setReasonInput('')
+        }
+      }
     } finally {
       setDayLoading(false)
     }
   }, [userId])
 
-  const closeDay = () => { setDayOpen(null); setDayReceipts([]); setDayTx([]); setLightboxUrl(null) }
+  const closeDay = () => { setDayOpen(null); setDayReceipts([]); setDayTx([]); setLightboxUrl(null); setDayResolved(null); setReasonInput('') }
 
   const prefillLink = (date: string, total?: number | string) => {
     const base = window.location.origin + '/officer'
@@ -136,6 +170,38 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
     p.set('date', date)
     if (total != null) p.set('total', String(total))
     return `${base}?${p.toString()}`
+  }
+
+  const markResolved = async () => {
+    if (!isManager || !dayOpen) return
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    const body = { user_id: userId, date: dayOpen, reason: reasonInput, manager_id: sessionData.session?.user?.id }
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/missing_resolutions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(body),
+    })
+    if (res.ok) {
+      setRefreshKey(x => x + 1)
+      await openDay(dayOpen)
+    } else {
+      alert('Failed to mark resolved')
+    }
+  }
+
+  const unresolve = async () => {
+    if (!isManager || !dayOpen) return
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/missing_resolutions?user_id=eq.${userId}&date=eq.${dayOpen}`
+    const res = await fetch(url, { method: 'DELETE', headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) } })
+    if (res.ok) {
+      setRefreshKey(x => x + 1)
+      await openDay(dayOpen)
+    } else {
+      alert('Failed to unresolve')
+    }
   }
 
   // Build calendar grid
@@ -206,6 +272,22 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
                   {dayReceipts.length === 0 && <div className="text-xs text-gray-600">No receipts for this day.</div>}
                 </div>
               </div>
+              {isManager && (
+                <div className="sm:col-span-2">
+                  <h4 className="font-medium mb-2">Resolution</h4>
+                  {dayResolved ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-gray-700">Marked resolved{dayResolved.reason ? `: ${dayResolved.reason}` : ''}</div>
+                      <button onClick={unresolve} className="px-3 py-1.5 rounded border border-red-600 text-red-700 hover:bg-red-50">Unresolve</button>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <textarea value={reasonInput} onChange={e=>setReasonInput(e.target.value)} placeholder="Reason (optional)" className="w-full border rounded p-2" rows={2} />
+                      <button onClick={markResolved} className="px-3 py-1.5 rounded border border-green-600 text-green-700 hover:bg-green-50">Mark Resolved</button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -220,8 +302,9 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
           const hasMissing = info && info.missing > 0
           const total = info ? info.all.length : 0
           const tx = info ? info.txCount : 0
+          const resolved = !!info?.resolved
           return (
-            <button key={idx} onClick={()=>openDay(key)} className={`text-left p-2 rounded border ${hasMissing ? 'bg-red-50 border-red-200' : total>0 ? 'bg-green-50 border-green-200' : 'bg-white'} min-h-[64px] flex flex-col hover:ring-2 hover:ring-blue-200`}>
+            <button key={idx} onClick={()=>openDay(key)} className={`text-left p-2 rounded border ${resolved ? 'bg-slate-50 border-slate-200' : hasMissing ? 'bg-red-50 border-red-200' : total>0 ? 'bg-green-50 border-green-200' : 'bg-white'} min-h-[64px] flex flex-col hover:ring-2 hover:ring-blue-200`}>
               <div className="flex items-center justify-between">
                 <div className="text-sm font-semibold text-gray-900">{c.date.getDate()}</div>
                 {loading && <div className="h-2 w-2 rounded-full bg-gray-300 animate-pulse" />}
@@ -230,6 +313,7 @@ export default function OfficerCalendar({ userId, monthStart }: Props) {
                 {hasMissing && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-red-100 text-red-700">Missing</span>}
                 {total>0 && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-gray-700">{total} receipt{total>1?'s':''}</span>}
                 {tx>0 && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">{tx} WEX</span>}
+                {resolved && <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-slate-200 text-slate-700">Resolved</span>}
               </div>
             </button>
           )
