@@ -2,22 +2,25 @@ import React from 'react'
 import ReceiptList from '../widgets/ReceiptList'
 import { useAuth } from '../shared/AuthContext'
 import { callEdgeFunctionJson } from '../shared/api'
+import OfficerCalendar from '../widgets/OfficerCalendar'
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title } from 'chart.js'
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title)
 
 export default function ManagerDashboard() {
-  const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'>('receipts')
+  const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'>('receipts')
   return (
     <div className="mx-auto max-w-6xl p-4">
       <div className="flex items-center gap-3 mb-4">
         <button className={tabBtn(tab==='receipts')} onClick={() => setTab('receipts')}>Receipts</button>
         <button className={tabBtn(tab==='users')} onClick={() => setTab('users')}>Users</button>
         <button className={tabBtn(tab==='analytics')} onClick={() => setTab('analytics')}>Analytics</button>
+        <button className={tabBtn(tab==='calendar')} onClick={() => setTab('calendar')}>Calendar</button>
       </div>
       {tab === 'receipts' && <ReceiptsPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'analytics' && <AnalyticsPanel />}
+      {tab === 'calendar' && <CalendarPanel />}
     </div>
   )
 }
@@ -158,6 +161,56 @@ function UsersPanel() {
         </div>
         {loading && <div className="mt-2 text-sm text-gray-500">Loading...</div>}
       </div>
+    </div>
+  )
+}
+
+function CalendarPanel() {
+  const { session } = useAuth()
+  const [officers, setOfficers] = React.useState<Array<{ id: string; name: string; email: string }>>([])
+  const [selected, setSelected] = React.useState<string>('')
+  const [monthStart, setMonthStart] = React.useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+
+  const load = React.useCallback(async () => {
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/user-management`, {
+      headers: { Authorization: `Bearer ${session?.access_token}` },
+    })
+    const data = await res.json()
+    const offs = (data.users || []).filter((u: any) => u.role === 'officer')
+    setOfficers(offs)
+    if (!selected && offs.length) setSelected(offs[0].id)
+  }, [session?.access_token, selected])
+
+  React.useEffect(() => { load() }, [load])
+
+  const changeMonth = (delta: number) => {
+    const d = new Date(monthStart)
+    d.setMonth(d.getMonth() + delta)
+    d.setDate(1)
+    setMonthStart(d)
+  }
+
+  const label = monthStart.toLocaleDateString(undefined, { year: 'numeric', month: 'long' })
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <select value={selected} onChange={e=>setSelected(e.target.value)} className="border rounded p-2">
+          {officers.map(o => (
+            <option key={o.id} value={o.id}>{o.name} ({o.email})</option>
+          ))}
+        </select>
+        <div className="ml-auto flex items-center gap-2">
+          <button onClick={()=>changeMonth(-1)} className="px-3 py-1.5 rounded border">Prev</button>
+          <div className="min-w-[10ch] text-center font-medium">{label}</div>
+          <button onClick={()=>changeMonth(1)} className="px-3 py-1.5 rounded border">Next</button>
+        </div>
+      </div>
+      {selected ? (
+        <OfficerCalendar userId={selected} monthStart={monthStart} />
+      ) : (
+        <div className="text-sm text-gray-600">Select an officer to view calendar.</div>
+      )}
     </div>
   )
 }
