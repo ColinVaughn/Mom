@@ -1,5 +1,5 @@
 [build]
-  command = "npm run build --prefix web"
+  command = "npm ci --prefix web && npm run build --prefix web"
   publish = "web/dist"
 
 [build.environment]
