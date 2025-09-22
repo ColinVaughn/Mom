@@ -560,35 +560,44 @@ export default function GasReceiptCapture({ onCapture, onError }: Props) {
         <canvas ref={canvasRef} className="hidden" />
         
         {cameraReady && (
-          <div className="absolute top-2 left-2 bg-black bg-opacity-50 text-white px-2 py-1 rounded text-xs">
+          <div className="absolute top-2 left-2 bg-black/60 text-white px-2 py-1 rounded text-xs">
             Position receipt within frame
           </div>
         )}
       </div>
-      
-      <div className="flex space-x-2">
-        <button
-          onClick={capture}
-          className="flex-1 bg-blue-600 text-white px-4 py-3 rounded font-medium disabled:bg-gray-400 hover:bg-blue-700"
-          disabled={!cameraReady || processing}
-        >
-          {processing ? 'Processing...' : 'Capture Receipt'}
-        </button>
-        
-        <button
-          onClick={() => setCaptureMode(captureMode === 'auto' ? 'manual' : 'auto')}
-          className="px-4 py-3 bg-gray-200 rounded hover:bg-gray-300"
-        >
-          {captureMode === 'auto' ? '📷 Auto' : '👆 Manual'}
-        </button>
-      </div>
-      
-      <div className="text-xs text-gray-600 text-center">
-        <p>Hold receipt flat and ensure good lighting</p>
-        <p>Receipt will be automatically cropped and enhanced</p>
-      </div>
+
+    <div className="flex items-center gap-2">
+      <button
+        onClick={capture}
+        className="flex-1 inline-flex items-center justify-center gap-2 bg-blue-600 text-white px-4 py-3 rounded-lg font-medium disabled:bg-gray-400 hover:bg-blue-700"
+        disabled={!cameraReady || processing}
+        aria-busy={processing}
+      >
+        {processing && (
+          <svg className="h-5 w-5 animate-spin" viewBox="0 0 24 24" aria-hidden="true">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" fill="none"></circle>
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z"></path>
+          </svg>
+        )}
+        <span>{processing ? 'Processing…' : 'Capture Receipt'}</span>
+      </button>
+
+      <button
+        onClick={() => setCaptureMode(captureMode === 'auto' ? 'manual' : 'auto')}
+        className={`px-4 py-3 rounded-lg border ${captureMode === 'auto' ? 'border-blue-600 text-blue-700 bg-blue-50' : 'border-gray-300 bg-white text-gray-800'} hover:bg-gray-50`}
+        aria-pressed={captureMode === 'auto'}
+        aria-label="Toggle auto capture"
+      >
+        {captureMode === 'auto' ? 'Auto' : 'Manual'}
+      </button>
     </div>
-  )
+
+    <div className="text-xs text-gray-600 text-center">
+      <p>Hold receipt flat and ensure good lighting</p>
+      <p>Receipt will be automatically cropped and enhanced</p>
+    </div>
+  </div>
+)
 }
 
 // Helper function to convert canvas to blob with fallback

@@ -10,9 +10,9 @@ export default function OfficerDashboard() {
   const [tab, setTab] = React.useState<'upload'|'history'>('upload')
   return (
     <div className="mx-auto max-w-5xl p-4">
-      <div className="flex items-center gap-3 mb-4">
-        <button className={tabBtn(tab==='upload')} onClick={() => setTab('upload')}>Upload</button>
-        <button className={tabBtn(tab==='history')} onClick={() => setTab('history')}>History</button>
+      <div className="inline-flex rounded-lg border bg-white shadow-sm overflow-hidden mb-4">
+        <button className={tabBtn(tab==='upload')} onClick={() => setTab('upload')} aria-pressed={tab==='upload'}>Upload</button>
+        <button className={tabBtn(tab==='history')} onClick={() => setTab('history')} aria-pressed={tab==='history'}>History</button>
       </div>
       {tab === 'upload' ? <UploadPanel /> : <HistoryPanel />}
     </div>
@@ -20,7 +20,7 @@ export default function OfficerDashboard() {
 }
 
 function tabBtn(active:boolean) {
-  return `px-4 py-2 rounded border ${active ? 'bg-blue-600 text-white border-blue-600' : 'bg-white hover:bg-gray-50'}`
+  return `px-4 py-2 text-sm md:text-base ${active ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-50'} `
 }
 
 function UploadPanel() {
@@ -115,65 +115,67 @@ function UploadPanel() {
 
   return (
     <div className="grid md:grid-cols-2 gap-6">
-      <div>
-        <h2 className="font-semibold mb-2">Auto-Capture (Camera)</h2>
+      <div className="bg-white rounded-xl border shadow-sm p-3 md:p-4">
+        <div className="flex items-center justify-between mb-2">
+          <h2 className="font-semibold text-gray-900">Capture Receipt</h2>
+        </div>
         <CameraCapture onCapture={onCaptured} />
       </div>
-      <form onSubmit={onSubmit} className="space-y-3">
-        <h2 className="font-semibold">Upload Details</h2>
-        <input type="file" accept="image/*" onChange={onFileChange} className="block w-full" />
+      <form onSubmit={onSubmit} className="space-y-3 bg-white rounded-xl border shadow-sm p-3 md:p-4">
+        <h2 className="font-semibold text-gray-900">Upload Details</h2>
+        <input type="file" accept="image/*" onChange={onFileChange} className="block w-full border rounded-lg p-2" />
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm text-gray-600">Date</label>
-            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="border rounded w-full p-2" required />
+            <input type="date" value={date} onChange={e=>setDate(e.target.value)} className="border rounded-lg w-full p-2" required />
           </div>
           <div>
             <label className="block text-sm text-gray-600">Total ($)</label>
-            <input type="number" step="0.01" value={total} onChange={e=>setTotal(e.target.value)} className="border rounded w-full p-2" required />
+            <input type="number" step="0.01" value={total} onChange={e=>setTotal(e.target.value)} className="border rounded-lg w-full p-2" required />
           </div>
         </div>
-        <details className="bg-gray-50 border rounded p-3">
+        <details className="bg-gray-50 border rounded-lg p-3">
           <summary className="cursor-pointer font-medium">Optional details (from OCR)</summary>
           <div className="grid md:grid-cols-3 gap-3 mt-3">
             <div>
               <label className="block text-sm text-gray-600">Time</label>
-              <input type="text" value={timeText} onChange={e=>setTimeText(e.target.value)} className="border rounded w-full p-2" placeholder="HH:MM" />
+              <input type="text" value={timeText} onChange={e=>setTimeText(e.target.value)} className="border rounded-lg w-full p-2" placeholder="HH:MM" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Gallons</label>
-              <input type="number" step="0.001" value={gallons} onChange={e=>setGallons(e.target.value)} className="border rounded w-full p-2" />
+              <input type="number" step="0.001" value={gallons} onChange={e=>setGallons(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Price/Gal</label>
-              <input type="number" step="0.001" value={pricePerGallon} onChange={e=>setPricePerGallon(e.target.value)} className="border rounded w-full p-2" />
+              <input type="number" step="0.001" value={pricePerGallon} onChange={e=>setPricePerGallon(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Fuel Grade</label>
-              <input type="text" value={fuelGrade} onChange={e=>setFuelGrade(e.target.value)} className="border rounded w-full p-2" />
+              <input type="text" value={fuelGrade} onChange={e=>setFuelGrade(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Station</label>
-              <input type="text" value={station} onChange={e=>setStation(e.target.value)} className="border rounded w-full p-2" />
+              <input type="text" value={station} onChange={e=>setStation(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Station Address</label>
-              <input type="text" value={stationAddress} onChange={e=>setStationAddress(e.target.value)} className="border rounded w-full p-2" />
+              <input type="text" value={stationAddress} onChange={e=>setStationAddress(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Payment Method</label>
-              <input type="text" value={paymentMethod} onChange={e=>setPaymentMethod(e.target.value)} className="border rounded w-full p-2" />
+              <input type="text" value={paymentMethod} onChange={e=>setPaymentMethod(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">Card Last4</label>
-              <input type="text" value={cardLast4} onChange={e=>setCardLast4(e.target.value)} maxLength={4} className="border rounded w-full p-2" />
+              <input type="text" value={cardLast4} onChange={e=>setCardLast4(e.target.value)} maxLength={4} className="border rounded-lg w-full p-2" />
             </div>
             <div>
               <label className="block text-sm text-gray-600">OCR Confidence</label>
-              <input type="number" step="0.01" value={ocrConfidence} onChange={e=>setOcrConfidence(e.target.value)} className="border rounded w-full p-2" />
+              <input type="number" step="0.01" value={ocrConfidence} onChange={e=>setOcrConfidence(e.target.value)} className="border rounded-lg w-full p-2" />
             </div>
           </div>
         </details>
-        <button disabled={busy} className="bg-blue-600 text-white px-4 py-2 rounded">{busy ? 'Uploading...' : 'Submit'}</button>
+        <button disabled={busy} className="w-full md:w-auto bg-blue-600 text-white px-4 py-2 rounded-lg disabled:bg-gray-400 hover:bg-blue-700">{busy ? 'Uploading...' : 'Submit'}</button>
         {message && <div className="text-sm text-gray-700">{message}</div>}
         {file && <Preview file={file} />}
       </form>

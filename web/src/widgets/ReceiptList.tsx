@@ -175,7 +175,55 @@ export default function ReceiptList({ scope }: Props) {
         </div>
       </div>
 
-      <div className="overflow-x-auto border rounded">
+      {/* Mobile cards */}
+      <div className="md:hidden space-y-3">
+        {receipts.map(r => (
+          <div key={r.id} className="bg-white rounded-lg border shadow-sm p-3">
+            <div className="flex items-center justify-between">
+              <div>
+                {visible.date && <div className="text-sm text-gray-600">{r.date}</div>}
+                {visible.station && (r as any).station && <div className="font-medium text-gray-900">{(r as any).station}</div>}
+              </div>
+              <div className="text-right">
+                {visible.total && <div className="text-base font-semibold text-gray-900">${Number(r.total).toFixed(2)}</div>}
+                {visible.status && (
+                  <span className={
+                    r.status==='missing' ? 'inline-block mt-1 px-2 py-0.5 text-xs rounded bg-yellow-100 text-yellow-800' :
+                    r.status==='verified' ? 'inline-block mt-1 px-2 py-0.5 text-xs rounded bg-green-100 text-green-800' :
+                    'inline-block mt-1 px-2 py-0.5 text-xs rounded bg-gray-100 text-gray-800'
+                  }>{r.status}</span>
+                )}
+              </div>
+            </div>
+            <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-sm">
+              {visible.time_text && <div className="text-gray-600">Time: <span className="text-gray-900">{(r as any).time_text || '—'}</span></div>}
+              {visible.gallons && <div className="text-gray-600">Gallons: <span className="text-gray-900">{(r as any).gallons ?? '—'}</span></div>}
+              {visible.price_per_gallon && <div className="text-gray-600">Price/Gal: <span className="text-gray-900">{(r as any).price_per_gallon ?? '—'}</span></div>}
+              {visible.fuel_grade && <div className="text-gray-600">Grade: <span className="text-gray-900">{(r as any).fuel_grade || '—'}</span></div>}
+              {visible.payment_method && <div className="text-gray-600">Payment: <span className="text-gray-900">{(r as any).payment_method || '—'}</span></div>}
+              {visible.card_last4 && <div className="text-gray-600">Card: <span className="text-gray-900">{(r as any).card_last4 ? `**** ${String((r as any).card_last4).padStart(4,'*')}` : '—'}</span></div>}
+            </div>
+            <div className="mt-2 flex items-center justify-between">
+              {visible.station_address && (r as any).station_address && (
+                <div className="text-xs text-gray-500 truncate pr-3">{(r as any).station_address}</div>
+              )}
+              {visible.image && (
+                r.signed_url ? (
+                  <a className="ml-auto inline-flex items-center px-3 py-1.5 text-sm rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50" href={r.signed_url} target="_blank" rel="noreferrer">View</a>
+                ) : (
+                  <span className="ml-auto text-xs text-gray-400">No image</span>
+                )
+              )}
+            </div>
+          </div>
+        ))}
+        {!loading && receipts.length === 0 && (
+          <div className="text-center text-gray-500 text-sm">No receipts</div>
+        )}
+      </div>
+
+      {/* Desktop table */}
+      <div className="hidden md:block overflow-x-auto border rounded">
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
@@ -221,7 +269,7 @@ export default function ReceiptList({ scope }: Props) {
                 )}
                 {visible.image && (
                   <td className="p-2">
-                    {r.signed_url ? <a className="text-blue-600 underline" href={r.signed_url} target="_blank">View</a> : <span className="text-gray-500">—</span>}
+                    {r.signed_url ? <a className="text-blue-600 underline" href={r.signed_url} target="_blank" rel="noreferrer">View</a> : <span className="text-gray-500">—</span>}
                   </td>
                 )}
               </tr>
