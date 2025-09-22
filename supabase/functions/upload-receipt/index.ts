@@ -25,6 +25,17 @@ Deno.serve(async (req) => {
     const file = form.get('file') as File | null
     const date = form.get('date') as string
     const totalStr = form.get('total') as string
+    // Optional OCR metadata
+    const time_text = (form.get('time_text') as string) || undefined
+    const gallonsStr = (form.get('gallons') as string) || undefined
+    const pricePerGallonStr = (form.get('price_per_gallon') as string) || undefined
+    const fuel_grade = (form.get('fuel_grade') as string) || undefined
+    const station = (form.get('station') as string) || undefined
+    const station_address = (form.get('station_address') as string) || undefined
+    const payment_method = (form.get('payment_method') as string) || undefined
+    const card_last4 = (form.get('card_last4') as string) || undefined
+    const ocrConfidenceStr = (form.get('ocr_confidence') as string) || undefined
+    const ocrRaw = (form.get('ocr') as string) || undefined
 
     if (!file) return errorJson('file is required', 400, origin)
     if (!date) return errorJson('date is required (YYYY-MM-DD)', 400, origin)
@@ -53,10 +64,34 @@ Deno.serve(async (req) => {
     const { data: sig, error: sigErr } = await admin.storage.from('receipts').createSignedUrl(path, 3600)
     const image_url = path
 
+    // Build insert payload
+    const insertPayload: Record<string, any> = {
+      user_id: uid,
+      date,
+      total,
+      image_url,
+      status: 'uploaded',
+    }
+    if (time_text) insertPayload.time_text = time_text
+    const gallons = gallonsStr ? Number(gallonsStr) : undefined
+    if (gallons != null && Number.isFinite(gallons)) insertPayload.gallons = gallons
+    const price_per_gallon = pricePerGallonStr ? Number(pricePerGallonStr) : undefined
+    if (price_per_gallon != null && Number.isFinite(price_per_gallon)) insertPayload.price_per_gallon = price_per_gallon
+    if (fuel_grade) insertPayload.fuel_grade = fuel_grade
+    if (station) insertPayload.station = station
+    if (station_address) insertPayload.station_address = station_address
+    if (payment_method) insertPayload.payment_method = payment_method
+    if (card_last4) insertPayload.card_last4 = card_last4
+    const ocr_confidence = ocrConfidenceStr ? Number(ocrConfidenceStr) : undefined
+    if (ocr_confidence != null && Number.isFinite(ocr_confidence)) insertPayload.ocr_confidence = ocr_confidence
+    if (ocrRaw) {
+      try { insertPayload.ocr = JSON.parse(ocrRaw) } catch {}
+    }
+
     // Insert DB row
     const { error: insErr, data: inserted } = await admin
       .from('receipts')
-      .insert({ user_id: uid, date, total, image_url, status: 'uploaded' })
+      .insert(insertPayload)
       .select('*')
       .single()
     if (insErr) return errorJson('db insert failed: ' + insErr.message, 400, origin)

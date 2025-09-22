@@ -25,6 +25,53 @@ export default function ReceiptList({ scope }: Props) {
   const [count, setCount] = React.useState<number>(0)
   const [loading, setLoading] = React.useState(false)
   const [users, setUsers] = React.useState<Array<{ id: string; name: string }>>([])
+  // Manager-customizable columns
+  const COLS = React.useMemo(() => (
+    [
+      { key: 'officer', label: 'Officer', managerOnly: true },
+      { key: 'date', label: 'Date' },
+      { key: 'time_text', label: 'Time' },
+      { key: 'total', label: 'Total ($)' },
+      { key: 'gallons', label: 'Gallons' },
+      { key: 'price_per_gallon', label: 'Price/Gal' },
+      { key: 'fuel_grade', label: 'Grade' },
+      { key: 'station', label: 'Station' },
+      { key: 'station_address', label: 'Station Address' },
+      { key: 'payment_method', label: 'Payment' },
+      { key: 'card_last4', label: 'Card ****' },
+      { key: 'ocr_confidence', label: 'OCR %' },
+      { key: 'status', label: 'Status' },
+      { key: 'image', label: 'Image' },
+    ] as const
+  ), [])
+  type ColKey = (typeof COLS)[number]['key']
+  const defaultVisible: Record<ColKey, boolean> = {
+    officer: scope === 'manager',
+    date: true,
+    time_text: false,
+    total: true,
+    gallons: false,
+    price_per_gallon: false,
+    fuel_grade: false,
+    station: true,
+    station_address: false,
+    payment_method: false,
+    card_last4: false,
+    ocr_confidence: false,
+    status: true,
+    image: true,
+  }
+  const [visible, setVisible] = React.useState<Record<ColKey, boolean>>(() => {
+    if (scope !== 'manager') return defaultVisible
+    try {
+      const raw = localStorage.getItem('manager_receipt_columns')
+      if (raw) {
+        const parsed = JSON.parse(raw)
+        return { ...defaultVisible, ...parsed }
+      }
+    } catch {}
+    return defaultVisible
+  })
 
   React.useEffect(() => {
     if (scope === 'manager') {
@@ -41,6 +88,13 @@ export default function ReceiptList({ scope }: Props) {
       })()
     }
   }, [scope, session?.access_token])
+
+  // Persist manager column choices
+  React.useEffect(() => {
+    if (scope === 'manager') {
+      try { localStorage.setItem('manager_receipt_columns', JSON.stringify(visible)) } catch {}
+    }
+  }, [scope, visible])
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -68,6 +122,21 @@ export default function ReceiptList({ scope }: Props) {
         <div className="mb-3 p-3 bg-yellow-50 border border-yellow-200 rounded text-yellow-800 text-sm">
           You have {missingCount} missing receipt{missingCount>1?'s':''}. Please upload them.
         </div>
+      )}
+      {scope === 'manager' && (
+        <details className="mb-3 bg-gray-50 border rounded p-3">
+          <summary className="cursor-pointer font-medium">Customize columns</summary>
+          <div className="grid md:grid-cols-4 gap-2 mt-2 text-sm">
+            {COLS.map(c => (
+              (c.managerOnly && scope !== 'manager') ? null : (
+                <label key={c.key} className="inline-flex items-center gap-2">
+                  <input type="checkbox" checked={visible[c.key]} onChange={e=>setVisible(v=>({ ...v, [c.key]: e.target.checked }))} />
+                  {c.label}
+                </label>
+              )
+            ))}
+          </div>
+        </details>
       )}
       <div className="grid md:grid-cols-6 gap-3 items-end mb-3">
         {scope === 'manager' && (
@@ -110,33 +179,55 @@ export default function ReceiptList({ scope }: Props) {
         <table className="min-w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              {scope==='manager' && <th className="text-left p-2">Officer</th>}
-              <th className="text-left p-2">Date</th>
-              <th className="text-right p-2">Total ($)</th>
-              <th className="text-left p-2">Status</th>
-              <th className="text-left p-2">Image</th>
+              {visible.officer && scope==='manager' && <th className="text-left p-2">Officer</th>}
+              {visible.date && <th className="text-left p-2">Date</th>}
+              {visible.time_text && <th className="text-left p-2">Time</th>}
+              {visible.total && <th className="text-right p-2">Total ($)</th>}
+              {visible.gallons && <th className="text-right p-2">Gallons</th>}
+              {visible.price_per_gallon && <th className="text-right p-2">Price/Gal</th>}
+              {visible.fuel_grade && <th className="text-left p-2">Grade</th>}
+              {visible.station && <th className="text-left p-2">Station</th>}
+              {visible.station_address && <th className="text-left p-2">Station Address</th>}
+              {visible.payment_method && <th className="text-left p-2">Payment</th>}
+              {visible.card_last4 && <th className="text-left p-2">Card ****</th>}
+              {visible.ocr_confidence && <th className="text-right p-2">OCR %</th>}
+              {visible.status && <th className="text-left p-2">Status</th>}
+              {visible.image && <th className="text-left p-2">Image</th>}
             </tr>
           </thead>
           <tbody>
             {receipts.map(r => (
               <tr key={r.id} className="border-t">
-                {scope==='manager' && <td className="p-2">{r.user_name}</td>}
-                <td className="p-2">{r.date}</td>
-                <td className="p-2 text-right">{Number(r.total).toFixed(2)}</td>
-                <td className="p-2">
-                  <span className={
-                    r.status==='missing' ? 'px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-800' :
-                    r.status==='verified' ? 'px-2 py-1 text-xs rounded bg-green-100 text-green-800' :
-                    'px-2 py-1 text-xs rounded bg-gray-100 text-gray-800'
-                  }>{r.status}</span>
-                </td>
-                <td className="p-2">
-                  {r.signed_url ? <a className="text-blue-600 underline" href={r.signed_url} target="_blank">View</a> : <span className="text-gray-500">—</span>}
-                </td>
+                {visible.officer && scope==='manager' && <td className="p-2">{r.user_name}</td>}
+                {visible.date && <td className="p-2">{r.date}</td>}
+                {visible.time_text && <td className="p-2">{(r as any).time_text || '—'}</td>}
+                {visible.total && <td className="p-2 text-right">{Number(r.total).toFixed(2)}</td>}
+                {visible.gallons && <td className="p-2 text-right">{(r as any).gallons != null ? Number((r as any).gallons).toFixed(3) : '—'}</td>}
+                {visible.price_per_gallon && <td className="p-2 text-right">{(r as any).price_per_gallon != null ? Number((r as any).price_per_gallon).toFixed(3) : '—'}</td>}
+                {visible.fuel_grade && <td className="p-2">{(r as any).fuel_grade || '—'}</td>}
+                {visible.station && <td className="p-2">{(r as any).station || '—'}</td>}
+                {visible.station_address && <td className="p-2">{(r as any).station_address || '—'}</td>}
+                {visible.payment_method && <td className="p-2">{(r as any).payment_method || '—'}</td>}
+                {visible.card_last4 && <td className="p-2">{(r as any).card_last4 ? `**** ${String((r as any).card_last4).padStart(4,'*')}` : '—'}</td>}
+                {visible.ocr_confidence && <td className="p-2 text-right">{(r as any).ocr_confidence != null ? Number((r as any).ocr_confidence).toFixed(0) : '—'}</td>}
+                {visible.status && (
+                  <td className="p-2">
+                    <span className={
+                      r.status==='missing' ? 'px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-800' :
+                      r.status==='verified' ? 'px-2 py-1 text-xs rounded bg-green-100 text-green-800' :
+                      'px-2 py-1 text-xs rounded bg-gray-100 text-gray-800'
+                    }>{r.status}</span>
+                  </td>
+                )}
+                {visible.image && (
+                  <td className="p-2">
+                    {r.signed_url ? <a className="text-blue-600 underline" href={r.signed_url} target="_blank">View</a> : <span className="text-gray-500">—</span>}
+                  </td>
+                )}
               </tr>
             ))}
             {!loading && receipts.length === 0 && (
-              <tr><td colSpan={scope==='manager'?5:4} className="p-3 text-center text-gray-500">No receipts</td></tr>
+              <tr><td colSpan={Object.values(visible).filter(Boolean).length} className="p-3 text-center text-gray-500">No receipts</td></tr>
             )}
           </tbody>
         </table>

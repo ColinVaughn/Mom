@@ -245,3 +245,23 @@ create policy wex_cards_modify_manager on public.wex_cards
 for all
 using (public.is_manager(auth.uid()))
 with check (public.is_manager(auth.uid()));
+
+-- 9) OCR-related columns for enhanced receipt metadata
+alter table public.receipts add column if not exists time_text text; -- optional HH:MM
+alter table public.receipts add column if not exists gallons numeric(10,3);
+alter table public.receipts add column if not exists price_per_gallon numeric(10,3);
+alter table public.receipts add column if not exists fuel_grade text;
+alter table public.receipts add column if not exists station text;
+alter table public.receipts add column if not exists station_address text;
+alter table public.receipts add column if not exists payment_method text;
+alter table public.receipts add column if not exists card_last4 text;
+alter table public.receipts add column if not exists ocr_confidence numeric(5,2);
+alter table public.receipts add column if not exists ocr jsonb default '{}'::jsonb not null;
+
+-- Recreate view so new receipt columns (added above) are included in r.* expansion
+drop view if exists public.receipts_with_user;
+create or replace view public.receipts_with_user as
+select r.*, u.name as user_name, u.email as user_email
+from public.receipts r
+join public.users u on u.id = r.user_id;
+alter view public.receipts_with_user set (security_invoker = true, security_barrier = true);
