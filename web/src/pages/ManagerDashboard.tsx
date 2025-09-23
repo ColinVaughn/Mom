@@ -431,10 +431,12 @@ function AnalyticsPanel() {
   const [stackedBars, setStackedBars] = React.useState(true)
   const [topMerchants, setTopMerchants] = React.useState<Array<{ merchant: string; amount: number }>>([])
   const [spendByOfficer, setSpendByOfficer] = React.useState<Array<{ user_id: string; user_name: string; amount: number }>>([])
+  const [anomalies, setAnomalies] = React.useState<Array<{ date: string; spend: number; zSpend: number; deficit: number; zDeficit: number }>>([])
 
   const spendRef = React.useRef<HTMLCanvasElement>(null)
   const missingRef = React.useRef<HTMLCanvasElement>(null)
-  const charts = React.useRef<{ spend: Chart | null; missing: Chart | null }>({ spend: null, missing: null })
+  const officerTrendRef = React.useRef<HTMLCanvasElement>(null)
+  const charts = React.useRef<{ spend: Chart | null; missing: Chart | null; officer: Chart | null }>({ spend: null, missing: null, officer: null })
 
   const fmt = (d: Date) => d.toISOString().slice(0, 10)
 
@@ -543,6 +545,25 @@ function AnalyticsPanel() {
         }
       }
 
+      // Anomaly detection (Z-score >= 2) based on Daily Spend and WEX Deficit
+      const spendSeries = labels.map(d => spendByDay[d] || 0)
+      const deficitSeries = labels.map(d => deficitByDay[d] || 0)
+      const mean = (arr: number[]) => arr.reduce((a,b)=>a+b,0) / (arr.length || 1)
+      const std = (arr: number[], m: number) => Math.sqrt(arr.reduce((a,b)=>a+(b-m)*(b-m),0) / (arr.length || 1))
+      const mSpend = mean(spendSeries)
+      const sSpend = std(spendSeries, mSpend) || 1
+      const mDef = mean(deficitSeries)
+      const sDef = std(deficitSeries, mDef) || 1
+      const ano: Array<{ date: string; spend: number; zSpend: number; deficit: number; zDeficit: number }> = []
+      for (let i=0;i<labels.length;i++) {
+        const zS = (spendSeries[i] - mSpend) / sSpend
+        const zD = (deficitSeries[i] - mDef) / sDef
+        if (zS >= 2 || zD >= 2) ano.push({ date: labels[i], spend: spendSeries[i], zSpend: Number(zS.toFixed(2)), deficit: deficitSeries[i], zDeficit: Number(zD.toFixed(2)) })
+      }
+      ano.sort((a,b) => Math.max(b.zSpend,b.zDeficit) - Math.max(a.zSpend,a.zDeficit))
+      setAnomalies(ano.slice(0, 20))
+      const anomalyDates = new Set(ano.map(a => a.date))
+
       // Summary
       const totalSpend = (nonMissing || []).reduce((a: number, r: any) => a + Number(r.total), 0)
       const receiptCount = (nonMissing || []).length
@@ -552,7 +573,7 @@ function AnalyticsPanel() {
       setSummary({ totalSpend, receiptCount, missingCount, wexCount, deficit })
 
       // Charts
-      charts.current.spend?.destroy(); charts.current.missing?.destroy()
+      charts.current.spend?.destroy(); charts.current.missing?.destroy(); charts.current.officer?.destroy()
       if (spendRef.current) {
         const spendData = labels.map(d => Number((spendByDay[d] || 0).toFixed(2)))
         const ma7: number[] = []
@@ -566,6 +587,9 @@ function AnalyticsPanel() {
           { label: 'Daily Spend', data: spendData, backgroundColor: '#2563eb' },
         ]
         if (showTrendline) datasets.push({ type: 'line', label: '7‑day Avg', data: ma7, borderColor: '#10b981', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0 })
+        // Overlay anomaly points
+        const anomalyPoints = labels.map((d, idx) => anomalyDates.has(d) ? spendSeries[idx] : null)
+        datasets.push({ type: 'line', label: 'Anomalies', data: anomalyPoints, showLine: false, pointRadius: 4, pointBackgroundColor: '#dc2626', borderColor: 'transparent' })
         charts.current.spend = new Chart(spendRef.current, {
           type: 'bar',
           data: { labels, datasets },
@@ -583,6 +607,31 @@ function AnalyticsPanel() {
             ],
           },
           options: { responsive: true, scales: { x: { stacked: stackedBars }, y: { beginAtZero: true, ticks: { precision: 0 }, stacked: stackedBars } } },
+        })
+      }
+
+      // Officer trendlines (lines per officer)
+      if (officerTrendRef.current) {
+        // Build per-officer per-day spend series
+        const perOfficer: Record<string, { name: string; series: number[]; total: number }> = {}
+        for (const r of nonMissing || []) {
+          const id = String((r as any).user_id || '')
+          const name = String((r as any).user_name || 'Officer')
+          const day = String(r.date).slice(0,10)
+          const idx = labels.indexOf(day)
+          if (idx < 0) continue
+          if (!perOfficer[id]) perOfficer[id] = { name, series: Array(labels.length).fill(0), total: 0 }
+          perOfficer[id].series[idx] += Number(r.total || 0)
+          perOfficer[id].total += Number(r.total || 0)
+        }
+        const entries = Object.entries(perOfficer)
+        const chosen = userId ? entries.filter(([id]) => id === userId) : entries.sort((a,b) => b[1].total - a[1].total).slice(0, 5)
+        const palette = ['#1d4ed8','#059669','#9333ea','#ef4444','#f59e0b','#0ea5e9','#16a34a']
+        const officerDatasets = chosen.map(([id, obj], i) => ({ label: obj.name || 'Officer', data: obj.series.map(v => Number(v.toFixed(2))), borderColor: palette[i % palette.length], backgroundColor: 'transparent', tension: 0.25, pointRadius: 0 }))
+        charts.current.officer = new Chart(officerTrendRef.current, {
+          type: 'line',
+          data: { labels, datasets: officerDatasets },
+          options: { responsive: true, scales: { y: { beginAtZero: true } } },
         })
       }
 
@@ -673,6 +722,51 @@ function AnalyticsPanel() {
     a.click(); URL.revokeObjectURL(a.href)
   }
 
+  const exportAnalyticsPdf = async () => {
+    // Capture canvases as images and build printable HTML
+    const spendImg = spendRef.current ? spendRef.current.toDataURL('image/png') : null
+    const missingImg = missingRef.current ? missingRef.current.toDataURL('image/png') : null
+    const officerImg = officerTrendRef.current ? officerTrendRef.current.toDataURL('image/png') : null
+    const f = fmt(from), t = fmt(to)
+    const officerLabel = userId ? (officers.find(o=>o.id===userId)?.name || 'Officer') : 'All officers'
+    const rows = anomalies.slice(0, 12).map(a => `<tr><td>${a.date}</td><td>$${a.spend.toFixed(2)}</td><td>${a.zSpend}</td><td>${a.deficit}</td><td>${a.zDeficit}</td></tr>`).join('')
+    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Analytics ${f} - ${t}</title>
+      <style>body{font-family:ui-sans-serif,system-ui,Segoe UI,Roboto; padding:20px;}
+      h1{font-size:18px;margin:0 0 8px} h2{font-size:15px;margin:16px 0 8px}
+      .kpis{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px}
+      .card{border:1px solid #e5e7eb;border-radius:8px;padding:10px}
+      table{width:100%;border-collapse:collapse;font-size:12px}
+      th,td{border-top:1px solid #e5e7eb;padding:6px 8px;text-align:left}
+      .meta{color:#374151;font-size:12px;margin-bottom:8px}
+      img{max-width:100%;height:auto;border:1px solid #e5e7eb;border-radius:6px}
+      </style></head><body>
+      <h1>GRTS Analytics</h1>
+      <div class="meta">Range: ${f} → ${t} • Officer: ${officerLabel}</div>
+      <div class="kpis">
+        <div class="card"><div>Total Spend</div><div><strong>${sumFmt(summary.totalSpend)}</strong></div></div>
+        <div class="card"><div>Receipts</div><div><strong>${summary.receiptCount}</strong></div></div>
+        <div class="card"><div>Missing${excludeResolved?' (excl. resolved)':''}</div><div><strong>${summary.missingCount}</strong></div></div>
+        <div class="card"><div>WEX Tx</div><div><strong>${summary.wexCount}</strong></div></div>
+        <div class="card"><div>WEX Deficit</div><div><strong>${summary.deficit}</strong></div></div>
+      </div>
+      <h2>Daily Spend</h2>
+      ${spendImg ? `<img src="${spendImg}" />` : '<div class="card">No chart</div>'}
+      <h2>Missing vs WEX Deficit</h2>
+      ${missingImg ? `<img src="${missingImg}" />` : '<div class="card">No chart</div>'}
+      <h2>Officer Spend Trends</h2>
+      ${officerImg ? `<img src="${officerImg}" />` : '<div class="card">No chart</div>'}
+      <h2>Anomalies</h2>
+      <table>
+        <thead><tr><th>Date</th><th>Spend</th><th>Z(Spend)</th><th>Deficit</th><th>Z(Def)</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="5">No anomalies</td></tr>'}</tbody>
+      </table>
+      <script>window.onload=()=>{setTimeout(()=>window.print(),300)}</script>
+    </body></html>`
+    const w = window.open('', '_blank', 'noopener,noreferrer')
+    if (!w) return
+    w.document.open(); w.document.write(html); w.document.close()
+  }
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-2">
@@ -711,6 +805,7 @@ function AnalyticsPanel() {
         </div>
         <button onClick={refresh} className="px-3 py-1.5 rounded border border-blue-600 text-blue-700 hover:bg-blue-50">Refresh</button>
         <button onClick={exportCsv} className="px-3 py-1.5 rounded border border-gray-800 text-gray-900 hover:bg-gray-50">Export CSV</button>
+        <button onClick={exportAnalyticsPdf} className="px-3 py-1.5 rounded border border-gray-800 text-gray-900 hover:bg-gray-50">Export PDF</button>
       </div>
 
       <div className="grid md:grid-cols-5 gap-3">
@@ -729,6 +824,42 @@ function AnalyticsPanel() {
         <div className="bg-white border rounded p-3">
           <div className="font-medium mb-2">Missing vs WEX Deficit</div>
           <canvas ref={missingRef} />
+        </div>
+      </div>
+
+      <div className="bg-white border rounded p-3">
+        <div className="font-medium mb-2">Officer Spend Trends</div>
+        <div className="text-xs text-gray-600 mb-1">Top officers by spend in range (or selected officer)</div>
+        <canvas ref={officerTrendRef} />
+      </div>
+
+      <div className="bg-white border rounded p-3">
+        <div className="font-medium mb-2">Anomalies (Z-score ≥ 2)</div>
+        <div className="overflow-x-auto">
+          <table className="min-w-full text-sm">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="p-2 text-left">Date</th>
+                <th className="p-2 text-left">Spend</th>
+                <th className="p-2 text-left">Z(Spend)</th>
+                <th className="p-2 text-left">Deficit</th>
+                <th className="p-2 text-left">Z(Def)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {anomalies.length ? anomalies.map(a => (
+                <tr key={a.date} className="border-t">
+                  <td className="p-2">{a.date}</td>
+                  <td className="p-2">{sumFmt(a.spend)}</td>
+                  <td className="p-2">{a.zSpend}</td>
+                  <td className="p-2">{a.deficit}</td>
+                  <td className="p-2">{a.zDeficit}</td>
+                </tr>
+              )) : (
+                <tr><td colSpan={5} className="p-3 text-center text-gray-500">No anomalies detected</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </div>
 
