@@ -3,9 +3,9 @@ import ReceiptList from '../widgets/ReceiptList'
 import { useAuth } from '../shared/AuthContext'
 import { callEdgeFunctionJson } from '../shared/api'
 import OfficerCalendar from '../widgets/OfficerCalendar'
-import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title } from 'chart.js'
+import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement } from 'chart.js'
 
-Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title)
+Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement)
 
 export default function ManagerDashboard() {
   const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'>('receipts')
@@ -420,46 +420,192 @@ function CalendarPanel() {
 }
 
 function AnalyticsPanel() {
-  const canvasRef = React.useRef<HTMLCanvasElement>(null)
-  React.useEffect(() => {
-    let chart: Chart | null = null
-    ;(async () => {
+  const [from, setFrom] = React.useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+  const [to, setTo] = React.useState(() => new Date())
+  const [officers, setOfficers] = React.useState<Array<{ id: string; name: string; email: string }>>([])
+  const [userId, setUserId] = React.useState<string>('')
+  const [loading, setLoading] = React.useState(false)
+  const [summary, setSummary] = React.useState({ totalSpend: 0, receiptCount: 0, missingCount: 0, wexCount: 0, deficit: 0 })
+
+  const spendRef = React.useRef<HTMLCanvasElement>(null)
+  const missingRef = React.useRef<HTMLCanvasElement>(null)
+  const charts = React.useRef<{ spend: Chart | null; missing: Chart | null }>({ spend: null, missing: null })
+
+  const fmt = (d: Date) => d.toISOString().slice(0, 10)
+
+  const loadOfficers = React.useCallback(async () => {
+    const { supabase } = await import('../shared/supabaseClient')
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/users?select=id,name,email,role&order=created_at.desc`, {
+      headers: { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    if (!res.ok) { setOfficers([]); return }
+    const rows = await res.json()
+    setOfficers((rows || []).filter((u: any) => u.role === 'officer'))
+  }, [])
+
+  React.useEffect(() => { loadOfficers() }, [loadOfficers])
+
+  const applyPreset = (days: number) => {
+    const end = new Date()
+    const start = new Date(Date.now() - days * 86400_000)
+    // Normalize to date-only
+    start.setHours(0,0,0,0); end.setHours(0,0,0,0)
+    setFrom(start)
+    setTo(end)
+  }
+
+  const refresh = React.useCallback(async () => {
+    setLoading(true)
+    try {
       const { supabase } = await import('../shared/supabaseClient')
       const { data: sessionData } = await supabase.auth.getSession()
       const token = sessionData.session?.access_token
-      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts_with_user?select=date,total`, {
-        headers: {
-          apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string,
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-      })
-      const data = await res.json()
-      const byMonth: Record<string, number> = {}
-      for (const r of data || []) {
-        const m = (r.date as string).slice(0,7)
-        byMonth[m] = (byMonth[m] || 0) + Number(r.total)
+      const auth = { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+      const f = fmt(from)
+      const t = fmt(to)
+      const userQ = userId ? `&user_id=eq.${userId}` : ''
+
+      // Non-missing receipts (spend and count)
+      const urlRec = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts_with_user?select=date,total&date=gte.${f}&date=lte.${t}${userQ}&status=neq.missing`
+      const resRec = await fetch(urlRec, { headers: auth })
+      const nonMissing = resRec.ok ? await resRec.json() : []
+
+      // Missing receipts
+      const urlMissing = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts?select=date&date=gte.${f}&date=lte.${t}${userQ}&status=eq.missing`
+      const resMissing = await fetch(urlMissing, { headers: auth })
+      const missingRows = resMissing.ok ? await resMissing.json() : []
+
+      // WEX transactions
+      const urlWex = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_transactions?select=amount,transacted_at&transacted_at=gte.${f}&transacted_at=lte.${t}${userQ}`
+      const resWex = await fetch(urlWex, { headers: auth })
+      const wexRows = resWex.ok ? await resWex.json() : []
+
+      // Build date list
+      const labels: string[] = []
+      for (let d = new Date(from); d <= to; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) {
+        labels.push(fmt(d))
       }
-      const labels = Object.keys(byMonth).sort()
-      const values = labels.map(k => Number(byMonth[k].toFixed(2)))
-      if (canvasRef.current) {
-        chart = new Chart(canvasRef.current, {
+
+      const spendByDay: Record<string, number> = {}
+      const receiptsByDay: Record<string, number> = {}
+      for (const r of nonMissing || []) {
+        const key = String(r.date).slice(0, 10)
+        spendByDay[key] = (spendByDay[key] || 0) + Number(r.total)
+        receiptsByDay[key] = (receiptsByDay[key] || 0) + 1
+      }
+
+      const missingByDay: Record<string, number> = {}
+      for (const m of missingRows || []) {
+        const key = String(m.date).slice(0, 10)
+        missingByDay[key] = (missingByDay[key] || 0) + 1
+      }
+
+      const wexByDay: Record<string, number> = {}
+      for (const w of wexRows || []) {
+        const key = String(w.transacted_at).slice(0, 10)
+        wexByDay[key] = (wexByDay[key] || 0) + 1
+      }
+
+      const deficitByDay: Record<string, number> = {}
+      for (const day of labels) {
+        const def = Math.max(0, (wexByDay[day] || 0) - (receiptsByDay[day] || 0))
+        deficitByDay[day] = def
+      }
+
+      // Summary
+      const totalSpend = (nonMissing || []).reduce((a: number, r: any) => a + Number(r.total), 0)
+      const receiptCount = (nonMissing || []).length
+      const missingCount = (missingRows || []).length
+      const wexCount = (wexRows || []).length
+      const deficit = labels.reduce((a, d) => a + (deficitByDay[d] || 0), 0)
+      setSummary({ totalSpend, receiptCount, missingCount, wexCount, deficit })
+
+      // Charts
+      charts.current.spend?.destroy(); charts.current.missing?.destroy()
+      if (spendRef.current) {
+        charts.current.spend = new Chart(spendRef.current, {
           type: 'bar',
           data: {
             labels,
-            datasets: [{ label: 'Monthly Spend', data: values, backgroundColor: '#2563eb' }],
+            datasets: [
+              { label: 'Daily Spend', data: labels.map(d => Number((spendByDay[d] || 0).toFixed(2))), backgroundColor: '#2563eb' },
+            ],
           },
-          options: {
-            responsive: true,
-          },
+          options: { responsive: true, scales: { y: { beginAtZero: true } } },
         })
       }
-    })()
-    return () => { chart?.destroy() }
-  }, [])
+      if (missingRef.current) {
+        charts.current.missing = new Chart(missingRef.current, {
+          type: 'bar',
+          data: {
+            labels,
+            datasets: [
+              { label: 'Flagged Missing', data: labels.map(d => missingByDay[d] || 0), backgroundColor: '#ef4444' },
+              { label: 'WEX Deficit', data: labels.map(d => deficitByDay[d] || 0), backgroundColor: '#f59e0b' },
+            ],
+          },
+          options: { responsive: true, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+        })
+      }
+    } finally {
+      setLoading(false)
+    }
+  }, [from, to, userId])
+
+  React.useEffect(() => { refresh() }, [refresh])
+
+  const sumFmt = (n: number) => `$${n.toFixed(2)}`
 
   return (
-    <div>
-      <canvas ref={canvasRef} />
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="flex flex-col">
+          <label className="text-xs text-gray-600">From</label>
+          <input type="date" value={fmt(from)} onChange={e=>setFrom(new Date(e.target.value))} className="border rounded p-2" />
+        </div>
+        <div className="flex flex-col">
+          <label className="text-xs text-gray-600">To</label>
+          <input type="date" value={fmt(to)} onChange={e=>setTo(new Date(e.target.value))} className="border rounded p-2" />
+        </div>
+        <div className="flex items-center gap-1">
+          <button onClick={()=>applyPreset(7)} className="px-2 py-1.5 rounded border">7d</button>
+          <button onClick={()=>applyPreset(30)} className="px-2 py-1.5 rounded border">30d</button>
+          <button onClick={()=>applyPreset(90)} className="px-2 py-1.5 rounded border">90d</button>
+        </div>
+        <div className="flex items-center gap-2 ml-auto">
+          <label className="text-xs text-gray-600">Officer</label>
+          <select value={userId} onChange={e=>setUserId(e.target.value)} className="border rounded p-2 min-w-[220px]">
+            <option value="">All officers</option>
+            {officers.map(o => (
+              <option key={o.id} value={o.id}>{o.name} ({o.email})</option>
+            ))}
+          </select>
+          <button onClick={refresh} className="px-3 py-1.5 rounded border border-blue-600 text-blue-700 hover:bg-blue-50">Refresh</button>
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-5 gap-3">
+        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Total Spend</div><div className="text-lg font-semibold">{sumFmt(summary.totalSpend)}</div></div>
+        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Receipts</div><div className="text-lg font-semibold">{summary.receiptCount}</div></div>
+        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Missing (flagged)</div><div className="text-lg font-semibold">{summary.missingCount}</div></div>
+        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">WEX Tx</div><div className="text-lg font-semibold">{summary.wexCount}</div></div>
+        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">WEX Deficit</div><div className="text-lg font-semibold">{summary.deficit}</div></div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border rounded p-3">
+          <div className="font-medium mb-2">Daily Spend</div>
+          <canvas ref={spendRef} />
+        </div>
+        <div className="bg-white border rounded p-3">
+          <div className="font-medium mb-2">Missing vs WEX Deficit</div>
+          <canvas ref={missingRef} />
+        </div>
+      </div>
+
+      {loading && <div className="text-sm text-gray-600">Loading…</div>}
     </div>
   )
 }
