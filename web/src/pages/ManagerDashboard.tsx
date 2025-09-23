@@ -426,6 +426,11 @@ function AnalyticsPanel() {
   const [userId, setUserId] = React.useState<string>('')
   const [loading, setLoading] = React.useState(false)
   const [summary, setSummary] = React.useState({ totalSpend: 0, receiptCount: 0, missingCount: 0, wexCount: 0, deficit: 0 })
+  const [excludeResolved, setExcludeResolved] = React.useState(true)
+  const [showTrendline, setShowTrendline] = React.useState(true)
+  const [stackedBars, setStackedBars] = React.useState(true)
+  const [topMerchants, setTopMerchants] = React.useState<Array<{ merchant: string; amount: number }>>([])
+  const [spendByOfficer, setSpendByOfficer] = React.useState<Array<{ user_id: string; user_name: string; amount: number }>>([])
 
   const spendRef = React.useRef<HTMLCanvasElement>(null)
   const missingRef = React.useRef<HTMLCanvasElement>(null)
@@ -468,7 +473,8 @@ function AnalyticsPanel() {
       const userQ = userId ? `&user_id=eq.${userId}` : ''
 
       // Non-missing receipts (spend and count)
-      const urlRec = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts_with_user?select=date,total&date=gte.${f}&date=lte.${t}${userQ}&status=neq.missing`
+      const urlRec = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts_with_user?select=user_id,user_name,date,total&date=gte.${f}&date=lte.${t}${userQ}&status=neq.missing`
+
       const resRec = await fetch(urlRec, { headers: auth })
       const nonMissing = resRec.ok ? await resRec.json() : []
 
@@ -478,7 +484,8 @@ function AnalyticsPanel() {
       const missingRows = resMissing.ok ? await resMissing.json() : []
 
       // WEX transactions
-      const urlWex = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_transactions?select=amount,transacted_at&transacted_at=gte.${f}&transacted_at=lte.${t}${userQ}`
+      const urlWex = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_transactions?select=amount,merchant,transacted_at&transacted_at=gte.${f}&transacted_at=lte.${t}${userQ}`
+
       const resWex = await fetch(urlWex, { headers: auth })
       const wexRows = resWex.ok ? await resWex.json() : []
 
@@ -514,10 +521,32 @@ function AnalyticsPanel() {
         deficitByDay[day] = def
       }
 
+      // Exclude manager-resolved days: subtract resolution counts from missing and deficit
+      let resolvedTotal = 0
+      if (excludeResolved) {
+        const resUrl = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/missing_resolutions?select=date,user_id&date=gte.${f}&date=lte.${t}${userQ}`
+        const resRes = await fetch(resUrl, { headers: auth })
+        if (resRes.ok) {
+          const rows: Array<{ date: string; user_id: string }> = await resRes.json()
+          const resolvedByDay: Record<string, number> = {}
+          for (const r of rows) {
+            const key = String(r.date).slice(0, 10)
+            resolvedByDay[key] = (resolvedByDay[key] || 0) + 1
+          }
+          resolvedTotal = rows.length
+          for (const day of labels) {
+            if (resolvedByDay[day]) {
+              missingByDay[day] = Math.max(0, (missingByDay[day] || 0) - resolvedByDay[day])
+              deficitByDay[day] = Math.max(0, (deficitByDay[day] || 0) - resolvedByDay[day])
+            }
+          }
+        }
+      }
+
       // Summary
       const totalSpend = (nonMissing || []).reduce((a: number, r: any) => a + Number(r.total), 0)
       const receiptCount = (nonMissing || []).length
-      const missingCount = (missingRows || []).length
+      const missingCount = Math.max(0, (missingRows || []).length - resolvedTotal)
       const wexCount = (wexRows || []).length
       const deficit = labels.reduce((a, d) => a + (deficitByDay[d] || 0), 0)
       setSummary({ totalSpend, receiptCount, missingCount, wexCount, deficit })
@@ -525,14 +554,21 @@ function AnalyticsPanel() {
       // Charts
       charts.current.spend?.destroy(); charts.current.missing?.destroy()
       if (spendRef.current) {
+        const spendData = labels.map(d => Number((spendByDay[d] || 0).toFixed(2)))
+        const ma7: number[] = []
+        for (let i=0;i<spendData.length;i++) {
+          const start = Math.max(0, i-6)
+          const slice = spendData.slice(start, i+1)
+          const avg = slice.length ? slice.reduce((a,b)=>a+b,0)/slice.length : 0
+          ma7.push(Number(avg.toFixed(2)))
+        }
+        const datasets: any[] = [
+          { label: 'Daily Spend', data: spendData, backgroundColor: '#2563eb' },
+        ]
+        if (showTrendline) datasets.push({ type: 'line', label: '7‑day Avg', data: ma7, borderColor: '#10b981', backgroundColor: 'transparent', tension: 0.3, pointRadius: 0 })
         charts.current.spend = new Chart(spendRef.current, {
           type: 'bar',
-          data: {
-            labels,
-            datasets: [
-              { label: 'Daily Spend', data: labels.map(d => Number((spendByDay[d] || 0).toFixed(2))), backgroundColor: '#2563eb' },
-            ],
-          },
+          data: { labels, datasets },
           options: { responsive: true, scales: { y: { beginAtZero: true } } },
         })
       }
@@ -546,17 +582,96 @@ function AnalyticsPanel() {
               { label: 'WEX Deficit', data: labels.map(d => deficitByDay[d] || 0), backgroundColor: '#f59e0b' },
             ],
           },
-          options: { responsive: true, scales: { y: { beginAtZero: true, ticks: { precision: 0 } } } },
+          options: { responsive: true, scales: { x: { stacked: stackedBars }, y: { beginAtZero: true, ticks: { precision: 0 }, stacked: stackedBars } } },
         })
       }
+
+      // Leaderboards
+      // Top merchants (by WEX amount)
+      const merchMap = new Map<string, number>()
+      for (const w of wexRows || []) {
+        const m = String(w.merchant || '')
+        const amt = Number(w.amount || 0)
+        merchMap.set(m, (merchMap.get(m) || 0) + amt)
+      }
+      const merchArr = Array.from(merchMap.entries()).map(([merchant, amount]) => ({ merchant: merchant || '—', amount }))
+        .sort((a,b) => b.amount - a.amount).slice(0, 10)
+      setTopMerchants(merchArr)
+
+      // Spend by officer (from receipts_with_user, non-missing)
+      const userMap = new Map<string, { user_id: string; user_name: string; amount: number }>()
+      for (const r of nonMissing || []) {
+        const id = String((r as any).user_id || '')
+        const name = String((r as any).user_name || 'Officer')
+        const amt = Number(r.total || 0)
+        const cur = userMap.get(id) || { user_id: id, user_name: name, amount: 0 }
+        cur.amount += amt
+        userMap.set(id, cur)
+      }
+      const userArr = Array.from(userMap.values()).sort((a,b) => b.amount - a.amount).slice(0, 10)
+      setSpendByOfficer(userArr)
     } finally {
       setLoading(false)
     }
-  }, [from, to, userId])
+  }, [from, to, userId, excludeResolved, showTrendline, stackedBars])
 
   React.useEffect(() => { refresh() }, [refresh])
 
   const sumFmt = (n: number) => `$${n.toFixed(2)}`
+
+  const exportCsv = async () => {
+    // Recompute using current state to assemble a CSV snapshot
+    const { supabase } = await import('../shared/supabaseClient')
+    const { data: sessionData } = await supabase.auth.getSession()
+    const token = sessionData.session?.access_token
+    const auth = { apikey: import.meta.env.VITE_SUPABASE_ANON_KEY as string, ...(token ? { Authorization: `Bearer ${token}` } : {}) }
+    const f = fmt(from), t = fmt(to)
+    const userQ = userId ? `&user_id=eq.${userId}` : ''
+    const urlRec = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts_with_user?select=date,total&date=gte.${f}&date=lte.${t}${userQ}&status=neq.missing`
+    const resRec = await fetch(urlRec, { headers: auth }); const nonMissing = resRec.ok ? await resRec.json() : []
+    const urlMissing = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/receipts?select=date&date=gte.${f}&date=lte.${t}${userQ}&status=eq.missing`
+    const resMissing = await fetch(urlMissing, { headers: auth }); const missingRows = resMissing.ok ? await resMissing.json() : []
+    const urlWex = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/wex_transactions?select=amount,transacted_at&transacted_at=gte.${f}&transacted_at=lte.${t}${userQ}`
+    const resWex = await fetch(urlWex, { headers: auth }); const wexRows = resWex.ok ? await resWex.json() : []
+
+    const labels: string[] = []
+    for (let d = new Date(from); d <= to; d = new Date(d.getFullYear(), d.getMonth(), d.getDate() + 1)) labels.push(fmt(d))
+    const spendByDay: Record<string, number> = {}; const receiptsByDay: Record<string, number> = {}
+    for (const r of nonMissing) { const k = String(r.date).slice(0,10); spendByDay[k]=(spendByDay[k]||0)+Number(r.total); receiptsByDay[k]=(receiptsByDay[k]||0)+1 }
+    const missingByDay: Record<string, number> = {}; for (const m of missingRows) { const k=String(m.date).slice(0,10); missingByDay[k]=(missingByDay[k]||0)+1 }
+    const wexByDay: Record<string, number> = {}; for (const w of wexRows) { const k=String(w.transacted_at).slice(0,10); wexByDay[k]=(wexByDay[k]||0)+1 }
+    const deficitByDay: Record<string, number> = {}; for (const k of labels) deficitByDay[k] = Math.max(0, (wexByDay[k]||0)-(receiptsByDay[k]||0))
+    if (excludeResolved) {
+      const resUrl = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/missing_resolutions?select=date,user_id&date=gte.${f}&date=lte.${t}${userQ}`
+      const r = await fetch(resUrl, { headers: auth }); if (r.ok) {
+        const rows = await r.json(); const resolved: Record<string, number> = {}
+        for (const x of rows) { const k=String(x.date).slice(0,10); resolved[k]=(resolved[k]||0)+1 }
+        for (const k of labels) { if (resolved[k]) { missingByDay[k]=Math.max(0,(missingByDay[k]||0)-resolved[k]); deficitByDay[k]=Math.max(0,(deficitByDay[k]||0)-resolved[k]) } }
+      }
+    }
+    const header = ['Date','Spend','Receipts','Missing','WEX Tx','Deficit']
+    const rows = [header]
+    for (const day of labels) {
+      rows.push([day, (spendByDay[day]||0).toFixed(2), String(receiptsByDay[day]||0), String(missingByDay[day]||0), String(wexByDay[day]||0), String(deficitByDay[day]||0)])
+    }
+    // Summary footer
+    const totalSpend = labels.reduce((a,d)=>a+(spendByDay[d]||0),0)
+    const receiptCount = labels.reduce((a,d)=>a+(receiptsByDay[d]||0),0)
+    const missingCount = labels.reduce((a,d)=>a+(missingByDay[d]||0),0)
+    const wexCount = labels.reduce((a,d)=>a+(wexByDay[d]||0),0)
+    const deficit = labels.reduce((a,d)=>a+(deficitByDay[d]||0),0)
+    rows.push([])
+    rows.push(['Summary', `Spend ${totalSpend.toFixed(2)}`, `Receipts ${receiptCount}`, `Missing ${missingCount}`, `WEX ${wexCount}`, `Deficit ${deficit}`])
+    const csv = rows.map(r => r.map(v => {
+      const s = String(v)
+      return /[",\n]/.test(s) ? '"'+s.replace(/"/g,'""')+'"' : s
+    }).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `analytics_${f}_${t}${userId?('_'+userId):''}.csv`
+    a.click(); URL.revokeObjectURL(a.href)
+  }
 
   return (
     <div className="space-y-3">
@@ -582,14 +697,26 @@ function AnalyticsPanel() {
               <option key={o.id} value={o.id}>{o.name} ({o.email})</option>
             ))}
           </select>
-          <button onClick={refresh} className="px-3 py-1.5 rounded border border-blue-600 text-blue-700 hover:bg-blue-50">Refresh</button>
         </div>
+        <div className="flex items-center gap-2">
+          <label className="text-xs text-gray-700 flex items-center gap-1">
+            <input type="checkbox" checked={excludeResolved} onChange={e=>setExcludeResolved(e.target.checked)} /> Exclude resolved
+          </label>
+          <label className="text-xs text-gray-700 flex items-center gap-1">
+            <input type="checkbox" checked={showTrendline} onChange={e=>setShowTrendline(e.target.checked)} /> Trendline
+          </label>
+          <label className="text-xs text-gray-700 flex items-center gap-1">
+            <input type="checkbox" checked={stackedBars} onChange={e=>setStackedBars(e.target.checked)} /> Stacked
+          </label>
+        </div>
+        <button onClick={refresh} className="px-3 py-1.5 rounded border border-blue-600 text-blue-700 hover:bg-blue-50">Refresh</button>
+        <button onClick={exportCsv} className="px-3 py-1.5 rounded border border-gray-800 text-gray-900 hover:bg-gray-50">Export CSV</button>
       </div>
 
       <div className="grid md:grid-cols-5 gap-3">
         <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Total Spend</div><div className="text-lg font-semibold">{sumFmt(summary.totalSpend)}</div></div>
         <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Receipts</div><div className="text-lg font-semibold">{summary.receiptCount}</div></div>
-        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Missing (flagged)</div><div className="text-lg font-semibold">{summary.missingCount}</div></div>
+        <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">Missing (flagged{excludeResolved?' – excl. resolved':''})</div><div className="text-lg font-semibold">{summary.missingCount}</div></div>
         <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">WEX Tx</div><div className="text-lg font-semibold">{summary.wexCount}</div></div>
         <div className="border rounded p-3 bg-white"><div className="text-xs text-gray-600">WEX Deficit</div><div className="text-lg font-semibold">{summary.deficit}</div></div>
       </div>
@@ -602,6 +729,35 @@ function AnalyticsPanel() {
         <div className="bg-white border rounded p-3">
           <div className="font-medium mb-2">Missing vs WEX Deficit</div>
           <canvas ref={missingRef} />
+        </div>
+      </div>
+
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className="bg-white border rounded p-3">
+          <div className="font-medium mb-2">Top Merchants (WEX)</div>
+          <div className="text-xs text-gray-600 mb-1">Range & filters applied</div>
+          <div className="space-y-1">
+            {topMerchants.map((m, i) => (
+              <div key={m.merchant + i} className="flex items-center justify-between">
+                <div className="truncate mr-2">{i+1}. {m.merchant || '—'}</div>
+                <div className="font-mono">{sumFmt(m.amount)}</div>
+              </div>
+            ))}
+            {topMerchants.length === 0 && <div className="text-sm text-gray-600">No data for range.</div>}
+          </div>
+        </div>
+        <div className="bg-white border rounded p-3">
+          <div className="font-medium mb-2">Spend by Officer</div>
+          <div className="text-xs text-gray-600 mb-1">From receipts (non-missing)</div>
+          <div className="space-y-1">
+            {spendByOfficer.map((u, i) => (
+              <div key={u.user_id + i} className="flex items-center justify-between">
+                <div className="truncate mr-2">{i+1}. {u.user_name}</div>
+                <div className="font-mono">{sumFmt(u.amount)}</div>
+              </div>
+            ))}
+            {spendByOfficer.length === 0 && <div className="text-sm text-gray-600">No data for range.</div>}
+          </div>
         </div>
       </div>
 
