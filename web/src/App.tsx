@@ -9,12 +9,13 @@ import Register from './pages/auth/Register'
 import ForgotPassword from './pages/auth/ForgotPassword'
 import ResetPassword from './pages/auth/ResetPassword'
 import MicrosoftButton from './components/MicrosoftButton'
+import TodoBoard from './widgets/TodoBoard'
 
 function Home() {
   const { session } = useAuth()
   return (
     <div className="min-h-screen flex items-center justify-center p-6">
-      <div className="max-w-xl w-full">
+      <div className="max-w-3xl w-full">
         <h1 className="text-2xl font-semibold mb-4">Gas Receipt Tracking System</h1>
         {!session ? (
           <>
@@ -36,6 +37,7 @@ function Home() {
               <a className="text-blue-600 underline" href="/officer">Go to Officer</a>
               <a className="text-blue-600 underline" href="/manager">Go to Manager</a>
             </div>
+            <TodoBoard />
           </>
         )}
       </div>
