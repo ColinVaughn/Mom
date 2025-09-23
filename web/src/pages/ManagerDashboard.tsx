@@ -3,9 +3,9 @@ import ReceiptList from '../widgets/ReceiptList'
 import { useAuth } from '../shared/AuthContext'
 import { callEdgeFunctionJson } from '../shared/api'
 import OfficerCalendar from '../widgets/OfficerCalendar'
-import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement } from 'chart.js'
+import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement, LineElement } from 'chart.js'
 
-Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement)
+Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement, LineElement)
 
 export default function ManagerDashboard() {
   const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'>('receipts')
@@ -573,7 +573,17 @@ function AnalyticsPanel() {
       setSummary({ totalSpend, receiptCount, missingCount, wexCount, deficit })
 
       // Charts
-      charts.current.spend?.destroy(); charts.current.missing?.destroy(); charts.current.officer?.destroy()
+      const destroyIfExists = (canvas: HTMLCanvasElement | null) => {
+        if (!canvas) return
+        const existing = (Chart as any).getChart ? (Chart as any).getChart(canvas) : null
+        if (existing) existing.destroy()
+      }
+      charts.current.spend?.destroy(); charts.current.spend = null
+      charts.current.missing?.destroy(); charts.current.missing = null
+      charts.current.officer?.destroy(); charts.current.officer = null
+      destroyIfExists(spendRef.current)
+      destroyIfExists(missingRef.current)
+      destroyIfExists(officerTrendRef.current)
       if (spendRef.current) {
         const spendData = labels.map(d => Number((spendByDay[d] || 0).toFixed(2)))
         const ma7: number[] = []
@@ -665,6 +675,15 @@ function AnalyticsPanel() {
   }, [from, to, userId, excludeResolved, showTrendline, stackedBars])
 
   React.useEffect(() => { refresh() }, [refresh])
+
+  // Cleanup charts on unmount or route change
+  React.useEffect(() => {
+    return () => {
+      charts.current.spend?.destroy(); charts.current.spend = null
+      charts.current.missing?.destroy(); charts.current.missing = null
+      charts.current.officer?.destroy(); charts.current.officer = null
+    }
+  }, [])
 
   const sumFmt = (n: number) => `$${n.toFixed(2)}`
 
