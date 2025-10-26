@@ -43,7 +43,7 @@ function Home() {
         <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-emerald-50" />
         <div className="relative mx-auto max-w-6xl px-4 py-10 md:py-14">
           <div className="max-w-3xl">
-            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900">Gas Receipt Tracking System</h1>
+            <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900">CCSO Gas Receipt Tracking</h1>
             {!session ? (
               <p className="mt-2 text-gray-600">Sign in to capture receipts, reconcile fuel transactions, and track spend.</p>
             ) : (
