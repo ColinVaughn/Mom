@@ -20,7 +20,9 @@ create table if not exists public.receipts (
   total numeric(10,2) not null check (total >= 0),
   -- store storage path like `${user_id}/<uuid>.jpg`; may be null when status = 'missing'
   image_url text,
+  thumbnail_url text,
   status text not null default 'uploaded' check (status in ('uploaded','verified','missing')),
+  recon_reason text,
   created_at timestamptz not null default now(),
   constraint receipts_image_presence_chk
     check ((status = 'missing' and image_url is null) or (status in ('uploaded','verified') and image_url is not null))
@@ -30,6 +32,9 @@ create table if not exists public.receipts (
 create index if not exists receipts_user_id_idx on public.receipts(user_id);
 create index if not exists receipts_date_idx on public.receipts(date);
 create index if not exists receipts_status_idx on public.receipts(status);
+-- Composite indexes for common queries
+create index if not exists idx_receipts_user_date_status on public.receipts(user_id, date desc, status);
+create index if not exists idx_receipts_date_total on public.receipts(date, total);
 
 -- 2b) WEX transactions captured via webhook or polling
 create table if not exists public.wex_transactions (
@@ -47,6 +52,7 @@ create table if not exists public.wex_transactions (
 create index if not exists wex_transactions_user_id_idx on public.wex_transactions(user_id);
 create index if not exists wex_transactions_date_idx on public.wex_transactions(transacted_at);
 create index if not exists wex_transactions_amount_idx on public.wex_transactions(amount);
+create index if not exists idx_wex_user_date on public.wex_transactions(user_id, transacted_at);
 
 -- Optional mapping: map card last4 to users for reconciliation
 create table if not exists public.wex_cards (
@@ -273,6 +279,8 @@ using (public.is_manager(auth.uid()))
 with check (public.is_manager(auth.uid()));
 
 -- 9) OCR-related columns for enhanced receipt metadata
+alter table public.receipts add column if not exists thumbnail_url text;
+alter table public.receipts add column if not exists recon_reason text;
 alter table public.receipts add column if not exists time_text text; -- optional HH:MM
 alter table public.receipts add column if not exists gallons numeric(10,3);
 alter table public.receipts add column if not exists price_per_gallon numeric(10,3);
@@ -283,6 +291,9 @@ alter table public.receipts add column if not exists payment_method text;
 alter table public.receipts add column if not exists card_last4 text;
 alter table public.receipts add column if not exists ocr_confidence numeric(5,2);
 alter table public.receipts add column if not exists ocr jsonb default '{}'::jsonb not null;
+-- Link to WEX transaction when known
+alter table public.receipts add column if not exists wex_id uuid references public.wex_transactions(id) on delete set null;
+create unique index if not exists idx_receipts_wex_id_unique on public.receipts(wex_id) where wex_id is not null;
 
 -- Recreate view so new receipt columns (added above) are included in r.* expansion
 drop view if exists public.receipts_with_user;
@@ -291,3 +302,27 @@ select r.*, u.name as user_name, u.email as user_email
 from public.receipts r
 join public.users u on u.id = r.user_id;
 alter view public.receipts_with_user set (security_invoker = true, security_barrier = true);
+
+-- Phase 4: expand status to include 'pending_review' and relax image presence for it
+do $$ begin
+  -- Drop old auto-named status constraint if it exists
+  begin
+    alter table public.receipts drop constraint if exists receipts_status_check;
+  exception when others then null; end;
+  -- Drop our named status constraint if it exists
+  begin
+    alter table public.receipts drop constraint if exists receipts_status_chk;
+  exception when others then null; end;
+  -- Add new status constraint
+  alter table public.receipts add constraint receipts_status_chk check (status in ('uploaded','verified','missing','pending_review'));
+  -- Drop and recreate image presence check to allow pending_review without image
+  begin
+    alter table public.receipts drop constraint if exists receipts_image_presence_chk;
+  exception when others then null; end;
+  alter table public.receipts add constraint receipts_image_presence_chk
+    check (
+      (status = 'missing' and image_url is null)
+      or (status in ('uploaded','verified') and image_url is not null)
+      or (status = 'pending_review')
+    );
+end $$;

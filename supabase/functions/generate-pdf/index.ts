@@ -50,6 +50,21 @@ Deno.serve(async (req) => {
 
     const receipts = rows || []
 
+    // Pre-fetch all images in parallel, embed as PDF images
+    const embedded = await Promise.all((receipts as any[]).map(async (r) => {
+      if (!r.image_url) return { r, img: null }
+      const { data: sig } = await admin.storage.from('receipts').createSignedUrl(r.image_url, 300)
+      if (!sig?.signedUrl) return { r, img: null }
+      const buf = new Uint8Array(await (await fetch(sig.signedUrl)).arrayBuffer())
+      let img: any = null
+      try {
+        img = await pdfDoc.embedJpg(buf)
+      } catch {
+        try { img = await pdfDoc.embedPng(buf) } catch { img = null }
+      }
+      return { r, img }
+    }))
+
     if (mode === 'grid') {
       const cols = 2
       const rowsPerPage = 2
@@ -62,8 +77,8 @@ Deno.serve(async (req) => {
       let col = 0
       let row = 0
 
-      for (const r of receipts) {
-        if (!page) page = pdfDoc.addPage([612, 792]) // Letter
+      for (const { r, img } of embedded) {
+        if (!page) page = pdfDoc.addPage([612, 792])
         // Draw header in cell
         page.drawText(`${r.user_name || ''}  ${r.date}  $${Number(r.total).toFixed(2)}`, {
           x: x + 8,
@@ -73,22 +88,9 @@ Deno.serve(async (req) => {
           color: rgb(0,0,0),
         })
 
-        if (r.image_url) {
-          const { data: sig } = await admin.storage.from('receipts').createSignedUrl(r.image_url, 300)
-          if (sig?.signedUrl) {
-            const imgRes = await fetch(sig.signedUrl)
-            const buf = new Uint8Array(await imgRes.arrayBuffer())
-            let img: any
-            try {
-              img = await pdfDoc.embedJpg(buf)
-            } catch {
-              try { img = await pdfDoc.embedPng(buf) } catch { img = null }
-            }
-            if (img) {
-              const dims = img.scaleToFit(cellW - 16, cellH - 40)
-              page.drawImage(img, { x: x + 8, y: y + 8, width: dims.width, height: dims.height })
-            }
-          }
+        if (img) {
+          const dims = img.scaleToFit(cellW - 16, cellH - 40)
+          page.drawImage(img, { x: x + 8, y: y + 8, width: dims.width, height: dims.height })
         }
 
         // advance grid position
@@ -108,28 +110,15 @@ Deno.serve(async (req) => {
         }
       }
     } else { // single per page
-      for (const r of receipts) {
+      for (const { r, img } of embedded) {
         const page = pdfDoc.addPage([612, 792])
         page.drawText(`${r.user_name || ''}`, { x: 40, y: 760, size: 12, font })
         page.drawText(`${r.date}`, { x: 40, y: 742, size: 12, font })
         page.drawText(`$${Number(r.total).toFixed(2)}`, { x: 40, y: 724, size: 12, font })
 
-        if (r.image_url) {
-          const { data: sig } = await admin.storage.from('receipts').createSignedUrl(r.image_url, 300)
-          if (sig?.signedUrl) {
-            const imgRes = await fetch(sig.signedUrl)
-            const buf = new Uint8Array(await imgRes.arrayBuffer())
-            let img: any
-            try {
-              img = await pdfDoc.embedJpg(buf)
-            } catch {
-              try { img = await pdfDoc.embedPng(buf) } catch { img = null }
-            }
-            if (img) {
-              const dims = img.scaleToFit(532, 640)
-              page.drawImage(img, { x: 40, y: 60, width: dims.width, height: dims.height })
-            }
-          }
+        if (img) {
+          const dims = img.scaleToFit(532, 640)
+          page.drawImage(img, { x: 40, y: 60, width: dims.width, height: dims.height })
         }
       }
     }

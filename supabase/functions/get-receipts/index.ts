@@ -47,13 +47,20 @@ Deno.serve(async (req) => {
     const signed: any[] = []
     for (const r of data || []) {
       let signed_url: string | null = null
+      let thumb_signed_url: string | null = null
       if (r.image_url && r.status !== 'missing') {
         const { data: s, error: sErr } = await admin.storage
           .from('receipts')
           .createSignedUrl(r.image_url, 3600)
         if (!sErr) signed_url = s.signedUrl
       }
-      signed.push({ ...r, signed_url })
+      if ((r as any).thumbnail_url) {
+        const { data: ts, error: tsErr } = await admin.storage
+          .from('receipts')
+          .createSignedUrl((r as any).thumbnail_url, 3600)
+        if (!tsErr) thumb_signed_url = ts.signedUrl
+      }
+      signed.push({ ...r, signed_url, thumb_signed_url })
     }
 
     return okJson({ receipts: signed, count })

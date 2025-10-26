@@ -1,5 +1,6 @@
 import React from 'react'
 import ReceiptList from '../widgets/ReceiptList'
+import ReconcilePanel from '../widgets/ReconcilePanel'
 import { useAuth } from '../shared/AuthContext'
 import { callEdgeFunctionJson } from '../shared/api'
 import OfficerCalendar from '../widgets/OfficerCalendar'
@@ -8,19 +9,39 @@ import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement, LineElement)
 
 export default function ManagerDashboard() {
-  const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'>('receipts')
+  const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'|'reconcile'>('receipts')
+
+  const valid = new Set(['receipts','users','analytics','calendar','reconcile'])
+  const applyHash = React.useCallback(() => {
+    const h = (window.location.hash || '').replace(/^#/,'')
+    if (valid.has(h)) setTab(h as any)
+  }, [])
+
+  React.useEffect(() => {
+    applyHash()
+    const onHash = () => applyHash()
+    window.addEventListener('hashchange', onHash)
+    return () => window.removeEventListener('hashchange', onHash)
+  }, [applyHash])
+
+  const selectTab = (t: 'receipts'|'users'|'analytics'|'calendar'|'reconcile') => {
+    setTab(t)
+    try { window.location.hash = t } catch {}
+  }
   return (
     <div className="mx-auto max-w-6xl p-4">
       <div className="flex items-center gap-3 mb-4">
-        <button className={tabBtn(tab==='receipts')} onClick={() => setTab('receipts')}>Receipts</button>
-        <button className={tabBtn(tab==='users')} onClick={() => setTab('users')}>Users</button>
-        <button className={tabBtn(tab==='analytics')} onClick={() => setTab('analytics')}>Analytics</button>
-        <button className={tabBtn(tab==='calendar')} onClick={() => setTab('calendar')}>Calendar</button>
+        <button className={tabBtn(tab==='receipts')} onClick={() => selectTab('receipts')}>Receipts</button>
+        <button className={tabBtn(tab==='users')} onClick={() => selectTab('users')}>Users</button>
+        <button className={tabBtn(tab==='analytics')} onClick={() => selectTab('analytics')}>Analytics</button>
+        <button className={tabBtn(tab==='calendar')} onClick={() => selectTab('calendar')}>Calendar</button>
+        <button className={tabBtn(tab==='reconcile')} onClick={() => selectTab('reconcile')}>Reconcile</button>
       </div>
       {tab === 'receipts' && <ReceiptsPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'analytics' && <AnalyticsPanel />}
       {tab === 'calendar' && <CalendarPanel />}
+      {tab === 'reconcile' && <ReconcilePanel />}
     </div>
   )
 }

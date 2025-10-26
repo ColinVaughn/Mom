@@ -3,9 +3,13 @@ declare const Deno: any;
 // deno-lint-ignore-file no-explicit-any
 import { corsHeaders, errorJson, okJson } from '../_shared/cors.ts'
 import { getUserClient, getAdminClient } from '../_shared/supabaseAdmin.ts'
+import { Image, decode as decodeImage } from 'https://deno.land/x/imagescript@1.2.15/mod.ts'
 
 const MAX_SIZE = 10 * 1024 * 1024 // 10MB
 const ALLOWED_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
+const JPEG_QUALITY = 85
+const MAX_IMAGE_WIDTH = 1600
+const THUMB_MAX_SIZE = 320
 
 Deno.serve(async (req) => {
   const origin = req.headers.get('origin') || '*'
@@ -56,20 +60,64 @@ Deno.serve(async (req) => {
 
     // Save to Storage
     const admin = getAdminClient()
-    const ext = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg'
     const key = crypto.randomUUID()
-    const path = `${uid}/${key}.${ext}`
 
-    const arrayBuffer = await file.arrayBuffer()
-    const { error: upErr } = await admin.storage.from('receipts').upload(path, new Uint8Array(arrayBuffer), {
-      contentType: file.type,
+    // Attempt to decode and convert to optimized JPEG
+    const originalBytes = new Uint8Array(await file.arrayBuffer())
+    let mainBytes: Uint8Array | null = null
+    let thumbBytes: Uint8Array | null = null
+    let finalContentType = 'image/jpeg'
+    let mainExt = 'jpg'
+    try {
+      // imagescript supports PNG/JPEG/TIFF/GIF; WEBP will throw
+      const img = await decodeImage(originalBytes)
+      // Resize if very large (preserve aspect ratio within bounding box)
+      if (img.width > MAX_IMAGE_WIDTH) {
+        img.contain(MAX_IMAGE_WIDTH, MAX_IMAGE_WIDTH)
+      }
+      mainBytes = await (img as Image).encodeJPEG(JPEG_QUALITY)
+      // Thumbnail
+      const thumb = (img as Image).clone().contain(THUMB_MAX_SIZE, THUMB_MAX_SIZE)
+      thumbBytes = await thumb.encodeJPEG(80)
+    } catch {
+      // Fallback: keep original bytes and content type/extension
+      mainBytes = originalBytes
+      finalContentType = file.type || 'application/octet-stream'
+      mainExt = file.type === 'image/png' ? 'png' : file.type === 'image/webp' ? 'webp' : 'jpg'
+      // No thumbnail if we couldn't decode
+      thumbBytes = null
+    }
+
+    const mainPath = `${uid}/${key}.${mainExt}`
+    const { error: upErr } = await admin.storage.from('receipts').upload(mainPath, mainBytes, {
+      contentType: finalContentType,
       upsert: false,
     })
     if (upErr) return errorJson('upload failed: ' + upErr.message, 400, origin)
 
+    // Upload thumbnail if available
+    let thumbPath: string | null = null
+    if (thumbBytes) {
+      thumbPath = `${uid}/thumbs/${key}.jpg`
+      const { error: thErr } = await admin.storage.from('receipts').upload(thumbPath, thumbBytes, {
+        contentType: 'image/jpeg',
+        upsert: false,
+      })
+      if (thErr) {
+        // Non-fatal: log server-side error
+        console.warn('thumbnail upload failed', thErr?.message)
+        thumbPath = null
+      }
+    }
+
     // Store the object path in DB; create a signed URL for immediate client preview
-    const { data: sig, error: sigErr } = await admin.storage.from('receipts').createSignedUrl(path, 3600)
-    const image_url = path
+    const { data: sig, error: sigErr } = await admin.storage.from('receipts').createSignedUrl(mainPath, 3600)
+    const image_url = mainPath
+    let thumbSigned: string | null = null
+    if (thumbPath) {
+      const { data: ts, error: tsErr } = await admin.storage.from('receipts').createSignedUrl(thumbPath, 3600)
+      thumbSigned = tsErr ? null : (ts?.signedUrl || null)
+    }
 
     // Build insert payload
     const insertPayload: Record<string, any> = {
@@ -79,6 +127,7 @@ Deno.serve(async (req) => {
       image_url,
       status: 'uploaded',
     }
+    if (thumbPath) insertPayload.thumbnail_url = thumbPath
     if (time_text) insertPayload.time_text = time_text
     const gallons = gallonsStr ? Number(gallonsStr) : undefined
     if (gallons != null && Number.isFinite(gallons)) insertPayload.gallons = gallons
@@ -127,7 +176,7 @@ Deno.serve(async (req) => {
       }
     } catch {}
 
-    return okJson({ receipt: inserted, storage_path: path, signed_url: sigErr ? null : sig.signedUrl })
+    return okJson({ receipt: inserted, storage_path: mainPath, signed_url: sigErr ? null : sig.signedUrl, thumbnail_signed_url: thumbSigned })
   } catch (e: any) {
     return errorJson('Unhandled error: ' + (e?.message || String(e)), 500, origin)
   }

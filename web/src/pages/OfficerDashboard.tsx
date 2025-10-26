@@ -1,5 +1,5 @@
 import React from 'react'
-import CameraCapture from '../widgets/CameraCapture'
+import CameraCaptureV2 from '../widgets/CameraCaptureV2'
 import { callEdgeFunctionMultipart } from '../shared/api'
 import { supabase } from '../shared/supabaseClient'
 import { useAuth } from '../shared/AuthContext'
@@ -50,6 +50,29 @@ function UploadPanel() {
     return dt.getFullYear() === y && (dt.getMonth() + 1) === mo && dt.getDate() === d
   }
 
+  // Compress an image to JPEG with max width for faster upload
+  const compressImage = React.useCallback(async (input: Blob, maxWidth = 1200, quality = 0.85): Promise<File> => {
+    // Create bitmap
+    const bitmap = await createImageBitmap(input)
+    let width = bitmap.width
+    let height = bitmap.height
+    if (width > maxWidth) {
+      height = Math.round(height * (maxWidth / width))
+      width = maxWidth
+    }
+    const canvas = document.createElement('canvas')
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext('2d')!
+    ctx.drawImage(bitmap, 0, 0, width, height)
+    const blob: Blob = await new Promise((resolve) => {
+      canvas.toBlob((b) => resolve(b || input), 'image/jpeg', quality)
+    })
+    const name = (input as File).name || `receipt-${Date.now()}.jpg`
+    const outName = /\.jpe?g$/i.test(name) ? name : name.replace(/\.[^.]+$/, '') + '.jpg'
+    return new File([blob], outName, { type: 'image/jpeg' })
+  }, [])
+
   // Prefill from query params if present (e.g., shared link from Manager calendar)
   React.useEffect(() => {
     try {
@@ -64,7 +87,9 @@ function UploadPanel() {
   }, [])
 
   const onCaptured = async (blob: Blob, data?: any) => {
-    const f = new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' })
+    // Compress captured image before setting file
+    const initial = new File([blob], `capture-${Date.now()}.jpg`, { type: 'image/jpeg' })
+    const f = await compressImage(initial)
     setFile(f)
     // Prime inputs from extracted data
     if (data?.date && isValidISODate(data.date)) setDate(data.date)
@@ -81,9 +106,13 @@ function UploadPanel() {
     setOcrRaw(data || null)
   }
 
-  const onFileChange: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+  const onFileChange: React.ChangeEventHandler<HTMLInputElement> = async (e) => {
     const f = e.target.files?.[0]
-    if (f) setFile(f)
+    if (f) {
+      // Compress chosen file before upload
+      const compressed = await compressImage(f)
+      setFile(compressed)
+    }
   }
 
   const onSubmit: React.FormEventHandler = async (e) => {
@@ -162,7 +191,7 @@ function UploadPanel() {
         <div className="flex items-center justify-between mb-2">
           <h2 className="font-semibold text-gray-900">Capture Receipt</h2>
         </div>
-        <CameraCapture onCapture={onCaptured} />
+        <CameraCaptureV2 onCapture={onCaptured} />
       </div>
       <form onSubmit={onSubmit} className="space-y-3 bg-white rounded-xl border shadow-sm p-3 md:p-4">
         <h2 className="font-semibold text-gray-900">Upload Details</h2>

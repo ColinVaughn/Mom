@@ -2,6 +2,8 @@ import React from 'react'
 import { callEdgeFunctionJson } from '../shared/api'
 import { useAuth } from '../shared/AuthContext'
 import Lightbox from '../components/Lightbox'
+import Thumb from '../components/Thumb'
+import { getCachedReceipts, setCachedReceipts, makeReceiptsCacheKey } from '../shared/receiptsCache'
 
 interface Props {
   scope: 'officer' | 'manager'
@@ -27,6 +29,9 @@ export default function ReceiptList({ scope }: Props) {
   const [loading, setLoading] = React.useState(false)
   const [users, setUsers] = React.useState<Array<{ id: string; name: string }>>([])
   const [lightboxUrl, setLightboxUrl] = React.useState<string | null>(null)
+  const [limit] = React.useState<number>(50)
+  const [offset, setOffset] = React.useState<number>(0)
+  const sentinelRef = React.useRef<HTMLDivElement | null>(null)
   // Manager-customizable columns
   const COLS = React.useMemo(() => (
     [
@@ -98,23 +103,72 @@ export default function ReceiptList({ scope }: Props) {
     }
   }, [scope, visible])
 
-  const load = React.useCallback(async () => {
+  const load = React.useCallback(async (append = false) => {
     setLoading(true)
     try {
+      const cacheKey = makeReceiptsCacheKey(scope, filters)
+      // Serve cached first page quickly
+      if (!append && offset === 0) {
+        const cached = await getCachedReceipts(cacheKey)
+        if (cached?.receipts?.length) {
+          setReceipts(cached.receipts)
+          setCount(cached.count || cached.receipts.length)
+        }
+      }
+
       const payload: any = { filters: {
         ...filters,
         amount_min: filters.amount_min ? Number(filters.amount_min) : undefined,
         amount_max: filters.amount_max ? Number(filters.amount_max) : undefined,
+        limit,
+        offset,
       } }
       const resp = await callEdgeFunctionJson('get-receipts', payload)
-      setReceipts(resp.receipts || [])
-      setCount(resp.count || 0)
+      const newReceipts = resp.receipts || []
+      const newCount = resp.count || 0
+      setCount(newCount)
+      setReceipts(prev => append ? [...prev, ...newReceipts] : newReceipts)
+      // Cache only first page for current filters
+      if (offset === 0 && !append) {
+        await setCachedReceipts(cacheKey, newReceipts, newCount)
+      }
     } finally {
       setLoading(false)
     }
-  }, [filters])
+  }, [filters, limit, offset, scope])
 
-  React.useEffect(() => { load() }, [load])
+  // Reset pagination when filters change
+  React.useEffect(() => { setOffset(0) }, [filters, scope])
+
+  // Load first page when offset is 0 (filters changed or initial)
+  React.useEffect(() => {
+    if (offset === 0) {
+      load(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, scope, limit, offset])
+
+  // When offset > 0, append next page
+  React.useEffect(() => {
+    if (offset > 0) {
+      load(true)
+    }
+  }, [offset, load])
+
+  // Infinite scroll: observe sentinel and increase offset when visible
+  React.useEffect(() => {
+    if (!sentinelRef.current) return
+    const el = sentinelRef.current
+    const io = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.isIntersecting && !loading && receipts.length < count) {
+          setOffset((prev) => prev + limit)
+        }
+      }
+    }, { rootMargin: '200px 0px', threshold: 0 })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [loading, receipts.length, count, limit])
 
   const missingCount = receipts.filter(r => r.status === 'missing').length
 
@@ -157,6 +211,7 @@ export default function ReceiptList({ scope }: Props) {
             <option value="uploaded">Uploaded</option>
             <option value="verified">Verified</option>
             <option value="missing">Missing</option>
+            <option value="pending_review">Pending Review</option>
           </select>
         </div>
         <div>
@@ -221,7 +276,13 @@ export default function ReceiptList({ scope }: Props) {
               )}
               {visible.image && (
                 r.signed_url ? (
-                  <button type="button" onClick={() => setLightboxUrl(r.signed_url!)} className="ml-auto inline-flex items-center px-3 py-1.5 text-sm rounded-md border border-gray-300 bg-white text-gray-700 hover:bg-gray-50">View</button>
+                  <Thumb
+                    src={(r as any).thumb_signed_url || r.signed_url!}
+                    alt="thumb"
+                    loading="lazy"
+                    className="ml-auto h-16 w-auto rounded border cursor-pointer bg-white"
+                    onClick={() => setLightboxUrl(r.signed_url!)}
+                  />
                 ) : (
                   <span className="ml-auto text-xs text-gray-400">No image</span>
                 )
@@ -281,6 +342,7 @@ export default function ReceiptList({ scope }: Props) {
                   <td className="p-2">
                     <span className={
                       r.status==='missing' ? 'px-2 py-1 text-xs rounded bg-yellow-100 text-yellow-800' :
+                      r.status==='pending_review' ? 'px-2 py-1 text-xs rounded bg-blue-100 text-blue-800' :
                       r.status==='verified' ? 'px-2 py-1 text-xs rounded bg-green-100 text-green-800' :
                       'px-2 py-1 text-xs rounded bg-gray-100 text-gray-800'
                     }>{r.status}</span>
@@ -288,7 +350,17 @@ export default function ReceiptList({ scope }: Props) {
                 )}
                 {visible.image && (
                   <td className="p-2">
-                    {r.signed_url ? <button type="button" onClick={() => setLightboxUrl(r.signed_url!)} className="text-blue-600 underline">View</button> : <span className="text-gray-500">—</span>}
+                    {r.signed_url ? (
+                      <Thumb
+                        src={(r as any).thumb_signed_url || r.signed_url!}
+                        alt="thumb"
+                        loading="lazy"
+                        className="h-12 w-auto rounded border cursor-pointer bg-white"
+                        onClick={() => setLightboxUrl(r.signed_url!)}
+                      />
+                    ) : (
+                      <span className="text-gray-500">—</span>
+                    )}
                   </td>
                 )}
               </tr>
@@ -298,6 +370,18 @@ export default function ReceiptList({ scope }: Props) {
             )}
           </tbody>
         </table>
+        {/* Pagination */}
+        {receipts.length < count && (
+          <div className="p-3 text-center">
+            <button
+              className="inline-flex items-center px-4 py-2 rounded border bg-white hover:bg-gray-50"
+              disabled={loading}
+              onClick={() => { setOffset(prev => prev + limit) }}
+            >{loading ? 'Loading…' : 'Load more'}</button>
+            {/* Infinite scroll sentinel */}
+            <div ref={sentinelRef} className="h-1" />
+          </div>
+        )}
       </div>
 
       {/* Lightbox */}
