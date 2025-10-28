@@ -734,10 +734,10 @@ function extractFields(ocrText: string, words: Array<{ text: string; confidence:
   const grade = text.match(/(REGULAR|PLUS|PREMIUM|DIESEL|UNLEADED|UNL|UNLD|SUPER|MID-?GRADE)/i)
   if (grade) { data.fuelGrade = grade[1].toUpperCase(); fc.fuelGrade = estimateConfidenceForTokens([grade[1]], words) || overall }
 
-  // Station brand
-  const stationPatterns = /(SHELL|EXXON|MOBIL|CHEVRON|TEXACO|BP|CITGO|SUNOCO|ARCO|VALERO|SPEEDWAY|7-ELEVEN|WAWA|SHEETZ|CASEY'S|MARATHON|PHILLIPS\s*66|CONOCO|SINCLAIR|GULF|76|CIRCLE\s*K|QUIKTRIP|QT|RACETRAC|PILOT|FLYING\s*J|LOVE'S|TA|PETRO|COSTCO|SAM'S\s*CLUB|BJ'S|KROGER|SAFEWAY)/i
+  // Station brand (known chains + generic patterns)
+  const stationPatterns = /(FUEL\s*DEPOT|SHELL|EXXON|MOBIL|CHEVRON|TEXACO|BP|CITGO|SUNOCO|ARCO|VALERO|SPEEDWAY|7-ELEVEN|WAWA|SHEETZ|CASEY'S|MARATHON|PHILLIPS\s*66|CONOCO|SINCLAIR|GULF|76|CIRCLE\s*K|QUIKTRIP|QT|RACETRAC|PILOT|FLYING\s*J|LOVE'S|TA|PETRO|COSTCO|SAM'S\s*CLUB|BJ'S|KROGER|SAFEWAY)/i
   const st = text.match(stationPatterns)
-  if (st) { data.station = st[1].toUpperCase(); fc.station = estimateConfidenceForTokens([st[1]], words) || overall }
+  if (st) { data.station = st[1].toUpperCase().replace(/\s+/g, ' '); fc.station = estimateConfidenceForTokens(st[1].split(/\s+/), words) || overall }
 
   // Address (best-effort)
   const lines = text.split(/\r?\n/)
@@ -746,9 +746,9 @@ function extractFields(ocrText: string, words: Array<{ text: string; confidence:
     if (m) { data.stationAddress = line.trim(); fc.stationAddress = estimateConfidenceForTokens(line.split(/\s+/), words) || overall; break }
   }
 
-  // Payment method
-  const pay = text.match(/(CASH|CREDIT|DEBIT|VISA|MASTERCARD|AMEX|DISCOVER|APPLE\s*PAY|GOOGLE\s*PAY)/i)
-  if (pay) { data.paymentMethod = pay[1].toUpperCase(); fc.paymentMethod = estimateConfidenceForTokens([pay[1]], words) || overall }
+  // Payment method (handle multi-word patterns like VISA DEBIT)
+  let pay = text.match(/(VISA\s*DEBIT(?:\s*PAID)?|MASTER(?:CARD)?\s*DEBIT|DEBIT\s*CARD|CREDIT\s*CARD|CASH|CREDIT|DEBIT|VISA|MASTERCARD|AMEX|DISCOVER|APPLE\s*PAY|GOOGLE\s*PAY)/i)
+  if (pay) { data.paymentMethod = pay[1].toUpperCase().replace(/\s+/g, ' ').replace(/\s*PAID$/i, ''); fc.paymentMethod = estimateConfidenceForTokens(pay[1].split(/\s+/), words) || overall }
 
   // Last 4
   const card = text.match(/\*{3,}(\d{4})|X{3,}(\d{4})|XXXX(\d{4})/i)
