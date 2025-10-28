@@ -146,11 +146,10 @@ function UsersPanel() {
 
   React.useEffect(() => { load() }, [load])
 
-  // When users list changes, auto-select the first officer for convenience
+  // When users list changes, auto-select the first user for convenience
   React.useEffect(() => {
     if (!selectedForCards && users.length) {
-      const first = users.find(u => u.role === 'officer')
-      if (first) setSelectedForCards(first.id)
+      setSelectedForCards(users[0].id)
     }
   }, [users, selectedForCards])
 
@@ -281,15 +280,15 @@ function UsersPanel() {
         <div className="mt-6 border rounded p-3 bg-white">
           <h3 className="font-semibold mb-2">Card Last4 Mapping</h3>
           <div className="flex flex-wrap items-center gap-2 mb-3">
-            <label className="text-sm text-gray-600">Officer</label>
+            <label className="text-sm text-gray-600">User</label>
             <select value={selectedForCards} onChange={e=>setSelectedForCards(e.target.value)} className="border rounded p-2">
-              <option value="">Select officer</option>
-              {users.filter(u=>u.role==='officer').map(u => (
-                <option key={u.id} value={u.id}>{u.name} ({u.email})</option>
+              <option value="">Select user</option>
+              {users.map(u => (
+                <option key={u.id} value={u.id}>{u.name} ({u.email}) - {u.role}</option>
               ))}
             </select>
-            {users.filter(u=>u.role==='officer').length === 0 && (
-              <span className="text-sm text-gray-600 ml-2">No officers found. Create one above in "Add User".</span>
+            {users.length === 0 && (
+              <span className="text-sm text-gray-600 ml-2">No users found. Create one above in "Add User".</span>
             )}
           </div>
           {selectedForCards ? (
@@ -323,7 +322,7 @@ function UsersPanel() {
               {cardsLoading && <div className="text-sm text-gray-500">Loading cards...</div>}
             </div>
           ) : (
-            <div className="text-sm text-gray-600">Select an officer to manage card mappings.</div>
+            <div className="text-sm text-gray-600">Select a user to manage card mappings.</div>
           )}
         </div>
       </div>
