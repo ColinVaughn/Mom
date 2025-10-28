@@ -1,4 +1,4 @@
-const CACHE_NAME = 'mom-receipts-v1';
+const CACHE_NAME = 'mom-receipts-v2'; // Updated: CDN bypass for OCR workers
 const ASSETS = [
   '/',
   '/index.html',
@@ -27,6 +27,11 @@ self.addEventListener('fetch', (event) => {
   // Bypass non-GET and auth/function requests
   if (req.method !== 'GET' || url.pathname.startsWith('/functions/v1') || url.pathname.includes('/auth/')) {
     return;
+  }
+
+  // CRITICAL: Bypass CDN requests for tesseract.js worker files (don't cache, don't intercept)
+  if (url.hostname === 'cdn.jsdelivr.net' || url.hostname === 'unpkg.com') {
+    return; // Let browser fetch directly
   }
 
   // Cache-First for Supabase Storage receipts images (signed/public URLs)

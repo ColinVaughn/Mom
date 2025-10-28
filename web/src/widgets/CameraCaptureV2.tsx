@@ -346,25 +346,58 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
 async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) => void, addLog?: (type: 'info'|'error'|'success', msg: string) => void): Promise<{ resultText: string; overallConfidence: number; words: Array<{ text: string; confidence: number }>}> {
   try {
     addLog?.('info', 'Importing tesseract.js library...')
+    const startImport = Date.now()
     const { createWorker } = await import('tesseract.js')
+    addLog?.('info', `Import took ${Date.now() - startImport}ms`)
     
     // Reuse a singleton worker stored on window to avoid reloading between captures
     const g: any = globalThis as any
     if (!g.__grts_ocr_worker__) {
       addLog?.('info', 'Creating new OCR worker (first time setup)...')
-      const worker = await createWorker({ 
+      addLog?.('info', 'Network status: ' + (navigator.onLine ? 'Online' : 'OFFLINE'))
+      
+      const startWorker = Date.now()
+      let workerCreated = false
+      
+      // Add timeout wrapper for worker creation specifically
+      // Configure to use CDN explicitly with better error handling
+      const workerPromise = createWorker({ 
+        workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/worker.min.js',
+        langPath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/lang-data',
+        corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0',
         logger: (m: any) => {
+          if (!workerCreated && m.status) {
+            addLog?.('info', `Worker initialization: ${m.status}`)
+          }
           if (m.status === 'recognizing text') {
             onProgress?.(m.progress)
           } else if (m.status) {
             addLog?.('info', `OCR: ${m.status}`)
           }
+        },
+        errorHandler: (err: any) => {
+          addLog?.('error', `Worker error handler: ${err?.message || err}`)
         }
       })
+      
+      const workerTimeout = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('Worker creation timeout after 20 seconds - likely network issue or CORS blocking worker files')), 20000)
+      })
+      
+      const worker = await Promise.race([workerPromise, workerTimeout])
+      workerCreated = true
+      addLog?.('success', `Worker created in ${Date.now() - startWorker}ms`)
+      
       addLog?.('info', 'Loading English language data...')
+      const startLang = Date.now()
       await worker.loadLanguage('eng')
+      addLog?.('info', `Language loaded in ${Date.now() - startLang}ms`)
+      
       addLog?.('info', 'Initializing OCR engine...')
+      const startInit = Date.now()
       await worker.initialize('eng')
+      addLog?.('info', `Engine initialized in ${Date.now() - startInit}ms`)
+      
       addLog?.('info', 'Configuring OCR parameters...')
       await worker.setParameters({
         tessedit_pageseg_mode: '6', // Assume a uniform block of text
@@ -388,6 +421,14 @@ async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) =>
     if (err instanceof Error && err.stack) {
       addLog?.('error', `Stack: ${err.stack.slice(0, 200)}...`)
     }
+    
+    // Check if it's a network-related error
+    if (!navigator.onLine) {
+      addLog?.('error', 'OFFLINE: Cannot download OCR worker files')
+    } else if (errorMsg.includes('timeout') || errorMsg.includes('network') || errorMsg.includes('fetch')) {
+      addLog?.('error', 'NETWORK ISSUE: OCR worker files failed to load. Check internet connection or CDN access.')
+    }
+    
     throw new Error(`OCR failed: ${errorMsg}`)
   }
 }
