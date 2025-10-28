@@ -11,6 +11,7 @@ import ForgotPassword from './pages/auth/ForgotPassword'
 import ResetPassword from './pages/auth/ResetPassword'
 import MicrosoftButton from './components/MicrosoftButton'
 import TodoBoard from './widgets/TodoBoard'
+import CardSetupDialog from './components/CardSetupDialog'
 
 function Home() {
   const { session } = useAuth()
@@ -144,6 +145,7 @@ export default function App() {
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </main>
+      {session && <CardSetupDialog />}
     </div>
   )
 }
