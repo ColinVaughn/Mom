@@ -83,12 +83,18 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
       ctx.drawImage(v, 0, 0, c.width, c.height)
       addLog('info', `Captured frame: ${c.width}x${c.height}px`)
 
-      // Downscale to reasonable working width to speed OCR
-      work = scaleCanvas(c, Math.min(1400, c.width))
+      // Scale up small images for better OCR (receipts often have small text)
+      const targetWidth = Math.max(1600, c.width)
+      work = scaleCanvas(c, targetWidth)
       addLog('info', `Scaled to: ${work.width}x${work.height}px`)
+      
+      // Apply sharpening to enhance edges
+      work = sharpenImage(work)
+      addLog('info', 'Applied sharpening')
+      
       // Adaptive thresholding for better OCR
       const bin = adaptiveThreshold(work, 32, 8)
-      addLog('info', 'Applied image enhancement')
+      addLog('info', 'Applied binarization')
 
       // OCR via shared worker with timeout
       const ocrBlob = await canvasToBlob(bin, 'image/png')
@@ -386,9 +392,14 @@ async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) =>
           addLog?.('info', `OCR: ${m.status}`)
         }
       },
-      tessedit_pageseg_mode: '6', // Assume a uniform block of text
+      tessedit_pageseg_mode: '4', // Single column of text (better for receipts than '6')
       preserve_interword_spaces: '1',
-      tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#()' ",
+      tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#@()' ",
+      // Enhanced Tesseract parameters for receipt OCR
+      tessedit_enable_dict_correction: '0', // Disable dictionary (receipts have non-dictionary words)
+      classify_bln_numeric_mode: '1', // Better number recognition
+      tessedit_do_invert: '0', // Don't invert (already handled in preprocessing)
+      edges_use_new_outline_complexity: '1', // Better edge detection
     })
     
     const words = (result.data?.words || []).map((w: any) => ({ 
@@ -414,15 +425,58 @@ async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) =>
   }
 }
 
-function scaleCanvas(src: HTMLCanvasElement, maxWidth: number): HTMLCanvasElement {
-  if (src.width <= maxWidth) return src
-  const ratio = maxWidth / src.width
+function scaleCanvas(src: HTMLCanvasElement, targetWidth: number): HTMLCanvasElement {
+  if (src.width === targetWidth) return src
+  const ratio = targetWidth / src.width
   const dst = document.createElement('canvas')
   dst.width = Math.round(src.width * ratio)
   dst.height = Math.round(src.height * ratio)
   const dctx = dst.getContext('2d')!
+  // Use high-quality scaling
+  dctx.imageSmoothingEnabled = true
+  dctx.imageSmoothingQuality = 'high'
   dctx.drawImage(src, 0, 0, dst.width, dst.height)
   return dst
+}
+
+// Sharpen image using unsharp mask to enhance text edges
+function sharpenImage(src: HTMLCanvasElement): HTMLCanvasElement {
+  const w = src.width, h = src.height
+  const ctx = src.getContext('2d')!
+  const img = ctx.getImageData(0, 0, w, h)
+  const data = img.data
+  const out = new Uint8ClampedArray(data.length)
+  
+  // Unsharp mask kernel (sharpening)
+  const kernel = [
+    0, -1, 0,
+    -1, 5, -1,
+    0, -1, 0
+  ]
+  
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      for (let c = 0; c < 3; c++) { // RGB channels
+        let sum = 0
+        sum += data[((y-1) * w + x) * 4 + c] * kernel[1]
+        sum += data[(y * w + (x-1)) * 4 + c] * kernel[3]
+        sum += data[(y * w + x) * 4 + c] * kernel[4]
+        sum += data[(y * w + (x+1)) * 4 + c] * kernel[5]
+        sum += data[((y+1) * w + x) * 4 + c] * kernel[7]
+        
+        out[(y * w + x) * 4 + c] = Math.min(255, Math.max(0, sum))
+      }
+      out[(y * w + x) * 4 + 3] = 255 // Alpha
+    }
+  }
+  
+  // Copy sharpened data back
+  for (let i = 0; i < data.length; i++) {
+    if (out[i] !== 0) data[i] = out[i]
+  }
+  
+  ctx.putImageData(img, 0, 0)
+  return src
 }
 
 // Block-adaptive thresholding: split into tiles and threshold per-tile using local mean - C
