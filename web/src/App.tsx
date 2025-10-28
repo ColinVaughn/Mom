@@ -39,21 +39,25 @@ function Home() {
   }, [session?.user?.id])
   return (
     <div className="min-h-[calc(100vh-56px)]">
-      <section className="relative overflow-hidden">
+      <section className="relative overflow-hidden min-h-[calc(100vh-56px)] flex items-center">
         <div className="absolute inset-0 bg-gradient-to-br from-blue-50 via-white to-emerald-50" />
-        <div className="relative mx-auto max-w-6xl px-4 py-10 md:py-14">
-          <div className="max-w-3xl">
+        <div className="relative mx-auto max-w-6xl px-4 py-10 md:py-14 w-full">
+          <div className="max-w-3xl mx-auto text-center">
             <h1 className="text-3xl md:text-4xl font-semibold tracking-tight text-gray-900">CCSO Gas Receipt Tracking</h1>
             {!session ? (
-              <p className="mt-2 text-gray-600">Sign in to capture receipts, reconcile fuel transactions, and track spend.</p>
+              <p className="mt-3 text-gray-600 text-lg">Sign in to capture receipts, reconcile fuel transactions, and track spend.</p>
             ) : (
-              <p className="mt-2 text-gray-600">Welcome{name ? `, ${name}` : ''}. Choose a dashboard or jump into a quick action.</p>
+              <p className="mt-3 text-gray-600 text-lg">Welcome{name ? `, ${name}` : ''}. Choose a dashboard or jump into a quick action.</p>
             )}
             {!session ? (
-              <div className="mt-6 flex flex-col sm:flex-row sm:items-center gap-3">
-                <a href="/login" className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-4 py-2 text-white shadow-sm hover:bg-blue-700">Sign in</a>
-                <div className="text-gray-500 text-sm">or</div>
-                <MicrosoftButton />
+              <div className="mt-8 flex flex-col items-center gap-4 max-w-md mx-auto">
+                <a href="/login" className="inline-flex items-center justify-center rounded-lg bg-blue-600 px-6 py-3 text-white shadow-sm hover:bg-blue-700 transition-colors w-full font-medium">Sign In</a>
+                <div className="flex items-center gap-3 w-full">
+                  <div className="h-px bg-gray-300 flex-1" />
+                  <span className="text-gray-500 text-sm">or</span>
+                  <div className="h-px bg-gray-300 flex-1" />
+                </div>
+                <MicrosoftButton className="shadow-sm font-medium" text="Sign in with Microsoft" />
               </div>
             ) : (
               <div className="mt-6 grid grid-cols-1 md:grid-cols-2 gap-4">

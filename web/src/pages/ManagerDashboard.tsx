@@ -52,7 +52,7 @@ function tabBtn(active:boolean) {
 
 function ReceiptsPanel() {
   const exportPdf = async (mode: 'single'|'grid') => {
-    const payload = { mode, filters: {} }
+    const payload = { mode, filters: {}, ...(mode==='grid' ? { use_thumbs: true } : {}) }
     const { data: sessionData } = await (await import('../shared/supabaseClient')).supabase.auth.getSession()
     const token = sessionData.session?.access_token
     const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-pdf`

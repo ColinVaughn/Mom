@@ -19,6 +19,22 @@ export default function MicrosoftButton({
   const { signInWithMicrosoft } = useAuth()
   const [busy, setBusy] = React.useState(false)
 
+  // Reset busy state when window regains focus (user likely closed OAuth popup)
+  React.useEffect(() => {
+    if (!busy) return
+
+    const handleFocus = () => {
+      // Small delay to allow OAuth redirect to complete if successful
+      const timer = setTimeout(() => {
+        setBusy(false)
+      }, 500)
+      return () => clearTimeout(timer)
+    }
+
+    window.addEventListener('focus', handleFocus)
+    return () => window.removeEventListener('focus', handleFocus)
+  }, [busy])
+
   const onClick = async () => {
     try {
       setBusy(true)
@@ -36,7 +52,7 @@ export default function MicrosoftButton({
       aria-label="Sign in with Microsoft"
       onClick={onClick}
       disabled={busy}
-      className={`${fullWidth ? 'w-full ' : ''}inline-flex items-center justify-center gap-2 border border-gray-300 bg-white hover:bg-gray-50 text-gray-800 px-4 py-2 rounded ${className}`}
+      className={`${fullWidth ? 'w-full ' : ''}inline-flex items-center justify-center gap-2 border border-gray-300 bg-white hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed text-gray-800 px-6 py-3 rounded-lg transition-colors ${className}`}
     >
       <MicrosoftLogo />
       <span>{busy ? 'Opening Microsoft…' : text}</span>

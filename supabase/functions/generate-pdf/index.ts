@@ -22,7 +22,7 @@ Deno.serve(async (req) => {
     const isManager = roleRow?.role === 'manager'
 
     const body = await req.json()
-    const { mode = 'single', receipt_ids, filters } = body || {}
+    const { mode = 'single', receipt_ids, filters, use_thumbs } = body || {}
 
     // Build query
     let query = admin.from('receipts_with_user').select('*').order('date', { ascending: true })
@@ -48,14 +48,61 @@ Deno.serve(async (req) => {
     const pdfDoc = await PDFDocument.create()
     const font = await pdfDoc.embedFont(StandardFonts.Helvetica)
 
-    const receipts = rows || []
+    const receipts = (rows || []) as any[]
 
-    // Pre-fetch all images in parallel, embed as PDF images
-    const embedded = await Promise.all((receipts as any[]).map(async (r) => {
-      if (!r.image_url) return { r, img: null }
-      const { data: sig } = await admin.storage.from('receipts').createSignedUrl(r.image_url, 300)
-      if (!sig?.signedUrl) return { r, img: null }
-      const buf = new Uint8Array(await (await fetch(sig.signedUrl)).arrayBuffer())
+    // Strategy:
+    // 1) Decide which path to use per receipt: thumbnail for grid (when available) or full image
+    // 2) Batch-sign all paths to minimize RPCs
+    // 3) Fetch and embed images with limited concurrency
+
+    const pathFor = (r: any) => {
+      if (mode === 'grid' && (use_thumbs ?? true)) return r.thumbnail_url || r.image_url
+      return r.image_url
+    }
+    const paths: string[] = []
+    const byIdxPath: (string | null)[] = receipts.map((r) => {
+      const p = pathFor(r)
+      if (p) { paths.push(p); return p } else { return null }
+    })
+
+    // Batch sign in chunks to avoid payload limits
+    const chunk = <T,>(arr: T[], n = 100): T[][] => {
+      const out: T[][] = []
+      for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n))
+      return out
+    }
+
+    const signedMap = new Map<string, string>()
+    for (const group of chunk(paths, 100)) {
+      const { data: signedBatch } = await admin.storage.from('receipts').createSignedUrls(group, 600)
+      for (const s of signedBatch || []) {
+        if (s.path && s.signedUrl) signedMap.set(s.path, s.signedUrl)
+      }
+    }
+
+    // Limit concurrent fetches/embeds to reduce memory spikes
+    async function mapLimit<T, R>(items: T[], limit: number, fn: (x: T, i: number) => Promise<R>): Promise<R[]> {
+      const ret: R[] = new Array(items.length) as any
+      let next = 0
+      const workers = new Array(Math.min(limit, items.length)).fill(0).map(async () => {
+        while (true) {
+          const i = next++
+          if (i >= items.length) break
+          ret[i] = await fn(items[i], i)
+        }
+      })
+      await Promise.all(workers)
+      return ret
+    }
+
+    const embedded = await mapLimit(receipts, 6, async (r) => {
+      const p = pathFor(r)
+      if (!p) return { r, img: null }
+      const url = signedMap.get(p)
+      if (!url) return { r, img: null }
+      const resp = await fetch(url)
+      if (!resp.ok) return { r, img: null }
+      const buf = new Uint8Array(await resp.arrayBuffer())
       let img: any = null
       try {
         img = await pdfDoc.embedJpg(buf)
@@ -63,7 +110,7 @@ Deno.serve(async (req) => {
         try { img = await pdfDoc.embedPng(buf) } catch { img = null }
       }
       return { r, img }
-    }))
+    })
 
     if (mode === 'grid') {
       const cols = 2
