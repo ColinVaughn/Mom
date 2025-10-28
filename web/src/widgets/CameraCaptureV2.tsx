@@ -103,7 +103,7 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
         }
       }, addLog, (status) => setOcrStatus(status))
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OCR timeout after 30 seconds')), 30000)
+        setTimeout(() => reject(new Error('OCR timeout after 90 seconds')), 90000)
       })
       
       const { resultText, overallConfidence, words } = await Promise.race([ocrPromise, timeoutPromise])
@@ -290,6 +290,19 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
           </button>
         )}
       </div>
+      {busy && ocrStatus && ocrStatus.includes('Downloading') && (
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
+          <div className="flex items-start gap-2">
+            <svg className="w-5 h-5 flex-shrink-0 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            <div>
+              <div className="font-semibold">First-time setup in progress</div>
+              <div className="text-xs mt-1">Downloading OCR engine (~2-3MB). This may take up to 60 seconds on mobile networks. Future captures will be instant.</div>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="text-xs text-gray-600 text-center">Good lighting helps OCR. Hold receipt flat.</div>
       
       {/* Debug Modal */}
