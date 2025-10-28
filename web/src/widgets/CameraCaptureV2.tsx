@@ -92,13 +92,13 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
       work = denoiseImage(work)
       addLog('info', 'Applied denoising')
       
-      // Increase contrast before binarization
-      work = enhanceContrast(work, 1.8)
+      // Moderate contrast enhancement (reduced from 1.8 to 1.3)
+      work = enhanceContrast(work, 1.3)
       addLog('info', 'Enhanced contrast')
       
-      // Use Otsu's method for better thresholding on thermal receipts
-      const bin = otsuThreshold(work)
-      addLog('info', 'Applied Otsu binarization')
+      // Use adaptive thresholding (better for variable lighting at edges)
+      const bin = adaptiveThreshold(work, 32, 8)
+      addLog('info', 'Applied adaptive binarization')
 
       // OCR via shared worker with timeout
       const ocrBlob = await canvasToBlob(bin, 'image/png')
