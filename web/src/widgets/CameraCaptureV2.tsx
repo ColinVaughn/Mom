@@ -103,7 +103,7 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
         }
       }, addLog, (status) => setOcrStatus(status))
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OCR timeout after 90 seconds')), 90000)
+        setTimeout(() => reject(new Error('OCR timeout after 45 seconds')), 45000)
       })
       
       const { resultText, overallConfidence, words } = await Promise.race([ocrPromise, timeoutPromise])
@@ -290,15 +290,14 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
           </button>
         )}
       </div>
-      {busy && ocrStatus && ocrStatus.includes('Downloading') && (
+      {busy && ocrProgress > 0 && (
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm text-blue-800">
-          <div className="flex items-start gap-2">
-            <svg className="w-5 h-5 flex-shrink-0 animate-spin" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            <div>
-              <div className="font-semibold">First-time setup in progress</div>
-              <div className="text-xs mt-1">Downloading OCR engine (~2-3MB). This may take up to 60 seconds on mobile networks. Future captures will be instant.</div>
+          <div className="flex items-center gap-2">
+            <div className="flex-1">
+              <div className="font-semibold mb-1">{ocrStatus || 'Processing...'}</div>
+              <div className="w-full bg-blue-200 rounded-full h-2">
+                <div className="bg-blue-600 h-2 rounded-full transition-all" style={{width: `${ocrProgress}%`}}></div>
+              </div>
             </div>
           </div>
         </div>
@@ -363,129 +362,52 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
 async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) => void, addLog?: (type: 'info'|'error'|'success', msg: string) => void, onStatus?: (status: string) => void): Promise<{ resultText: string; overallConfidence: number; words: Array<{ text: string; confidence: number }>}> {
   try {
     addLog?.('info', 'Importing tesseract.js library...')
+    onStatus?.('Loading OCR engine...')
     const startImport = Date.now()
-    const { createWorker } = await import('tesseract.js')
+    const { default: Tesseract } = await import('tesseract.js')
     addLog?.('info', `Import took ${Date.now() - startImport}ms`)
     
-    // Reuse a singleton worker stored on window to avoid reloading between captures
-    const g: any = globalThis as any
-    if (!g.__grts_ocr_worker__) {
-      onStatus?.('Downloading OCR engine...')
-      addLog?.('info', 'Creating new OCR worker (first time setup)...')
-      addLog?.('info', 'Network status: ' + (navigator.onLine ? 'Online' : 'OFFLINE'))
-      addLog?.('info', 'Connection type: ' + ((navigator as any).connection?.effectiveType || 'unknown'))
-      
-      const startWorker = Date.now()
-      let workerCreated = false
-      let lastStatus = ''
-      
-      // Try multiple CDN mirrors with fallback
-      const cdnConfigs = [
-        {
-          name: 'jsDelivr',
-          workerPath: 'https://cdn.jsdelivr.net/npm/tesseract.js@5.0.5/dist/worker.min.js',
-          langPath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0/lang-data',
-          corePath: 'https://cdn.jsdelivr.net/npm/tesseract.js-core@5.0.0'
-        },
-        {
-          name: 'unpkg',
-          workerPath: 'https://unpkg.com/tesseract.js@5.0.5/dist/worker.min.js',
-          langPath: 'https://unpkg.com/tesseract.js-core@5.0.0/lang-data',
-          corePath: 'https://unpkg.com/tesseract.js-core@5.0.0'
-        }
-      ]
-      
-      let lastError: Error | null = null
-      
-      for (const config of cdnConfigs) {
-        try {
-          onStatus?.(`Downloading from ${config.name}...`)
-          addLog?.('info', `Trying ${config.name} CDN...`)
-          
-          const workerPromise = createWorker({ 
-            workerPath: config.workerPath,
-            langPath: config.langPath,
-            corePath: config.corePath,
-            logger: (m: any) => {
-              if (!workerCreated && m.status && m.status !== lastStatus) {
-                lastStatus = m.status
-                addLog?.('info', `${config.name}: ${m.status}${m.progress ? ` (${Math.round(m.progress * 100)}%)` : ''}`)
-              }
-              if (m.status === 'recognizing text') {
-                onProgress?.(m.progress)
-              }
-            },
-            errorHandler: (err: any) => {
-              addLog?.('error', `${config.name} error: ${err?.message || err}`)
-            }
-          })
-          
-          // Increased timeout for mobile networks (60 seconds)
-          const workerTimeout = new Promise<never>((_, reject) => {
-            setTimeout(() => reject(new Error(`Worker creation timeout after 60 seconds on ${config.name}`)), 60000)
-          })
-          
-          const worker = await Promise.race([workerPromise, workerTimeout])
-          workerCreated = true
-          addLog?.('success', `Worker created using ${config.name} in ${Date.now() - startWorker}ms`)
-          
-          onStatus?.('Loading language data...')
-          addLog?.('info', 'Loading English language data...')
-          const startLang = Date.now()
-          await worker.loadLanguage('eng')
-          addLog?.('info', `Language loaded in ${Date.now() - startLang}ms`)
-          
-          onStatus?.('Initializing OCR engine...')
-          addLog?.('info', 'Initializing OCR engine...')
-          const startInit = Date.now()
-          await worker.initialize('eng')
-          addLog?.('info', `Engine initialized in ${Date.now() - startInit}ms`)
-          
-          addLog?.('info', 'Configuring OCR parameters...')
-          await worker.setParameters({
-            tessedit_pageseg_mode: '6', // Assume a uniform block of text
-            preserve_interword_spaces: '1',
-            tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#()' ",
-          })
-          onStatus?.('OCR ready!')
-          addLog?.('success', 'OCR worker ready!')
-          g.__grts_ocr_worker__ = worker
-          break // Success, exit retry loop
-        } catch (err) {
-          lastError = err instanceof Error ? err : new Error(String(err))
-          addLog?.('error', `${config.name} failed: ${lastError.message}`)
-          
-          // Continue to next CDN
-          if (config === cdnConfigs[cdnConfigs.length - 1]) {
-            // This was the last CDN, throw the error
-            throw lastError
-          }
-        }
-      }
-    } else {
-      addLog?.('info', 'Reusing existing OCR worker')
-    }
-    
-    const worker = g.__grts_ocr_worker__
+    // Use the simpler Tesseract.recognize API that bundles everything
+    // This avoids CDN worker file downloads that were timing out on mobile
     onStatus?.('Analyzing receipt...')
     addLog?.('info', `Processing image (${img.size} bytes)...`)
-    const { data } = await worker.recognize(img)
-    const words = (data?.words || []).map((w: any) => ({ text: String(w.text || ''), confidence: Number(w.confidence || 0) }))
-    return { resultText: String(data?.text || ''), overallConfidence: Number(data?.confidence || 0), words }
+    
+    const result = await Tesseract.recognize(img, 'eng', {
+      logger: (m: any) => {
+        if (m.status === 'recognizing text') {
+          onProgress?.(m.progress)
+          if (m.progress > 0 && m.progress < 1) {
+            const pct = Math.round(m.progress * 100)
+            if (pct % 20 === 0) {
+              addLog?.('info', `OCR progress: ${pct}%`)
+            }
+          }
+        } else if (m.status) {
+          addLog?.('info', `OCR: ${m.status}`)
+        }
+      },
+      tessedit_pageseg_mode: '6', // Assume a uniform block of text
+      preserve_interword_spaces: '1',
+      tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#()' ",
+    })
+    
+    const words = (result.data?.words || []).map((w: any) => ({ 
+      text: String(w.text || ''), 
+      confidence: Number(w.confidence || 0) 
+    }))
+    
+    addLog?.('success', `OCR complete! Confidence: ${Math.round(result.data.confidence)}%`)
+    
+    return { 
+      resultText: String(result.data.text || ''), 
+      overallConfidence: Number(result.data.confidence || 0), 
+      words 
+    }
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : 'Unknown error'
-    addLog?.('error', `OCR worker failed: ${errorMsg}`)
+    addLog?.('error', `OCR failed: ${errorMsg}`)
     if (err instanceof Error && err.stack) {
       addLog?.('error', `Stack: ${err.stack.slice(0, 200)}...`)
-    }
-    
-    // Check if it's a network-related error
-    if (!navigator.onLine) {
-      addLog?.('error', 'OFFLINE: Cannot download OCR worker files. Connect to internet and try again.')
-    } else if (errorMsg.includes('timeout')) {
-      addLog?.('error', 'TIMEOUT: OCR files are taking too long to download. Try moving to a location with better network coverage.')
-    } else if (errorMsg.includes('network') || errorMsg.includes('fetch') || errorMsg.includes('Failed to fetch')) {
-      addLog?.('error', 'NETWORK ERROR: Cannot reach CDN servers. Check firewall/VPN settings or try again later.')
     }
     
     throw new Error(`OCR failed: ${errorMsg}`)
