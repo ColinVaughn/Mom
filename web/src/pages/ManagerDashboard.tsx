@@ -51,36 +51,69 @@ function tabBtn(active:boolean) {
 }
 
 function ReceiptsPanel() {
+  const [exporting, setExporting] = React.useState<'single'|'grid'|null>(null)
+
   const exportPdf = async (mode: 'single'|'grid') => {
-    const payload = { mode, filters: {}, ...(mode==='grid' ? { use_thumbs: true } : {}) }
-    const { data: sessionData } = await (await import('../shared/supabaseClient')).supabase.auth.getSession()
-    const token = sessionData.session?.access_token
-    const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-pdf`
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) {
-      const t = await res.text()
-      throw new Error(t)
+    try {
+      setExporting(mode)
+      const payload = { mode, filters: {}, ...(mode==='grid' ? { use_thumbs: true } : {}) }
+      const { data: sessionData } = await (await import('../shared/supabaseClient')).supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      const url = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-pdf`
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const t = await res.text()
+        throw new Error(t)
+      }
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      a.href = URL.createObjectURL(blob)
+      a.download = 'receipts.pdf'
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (err: any) {
+      alert(`PDF export failed: ${err?.message || 'Unknown error'}`)
+    } finally {
+      setExporting(null)
     }
-    const blob = await res.blob()
-    const a = document.createElement('a')
-    a.href = URL.createObjectURL(blob)
-    a.download = 'receipts.pdf'
-    a.click()
-    URL.revokeObjectURL(a.href)
   }
 
   return (
     <div>
       <div className="flex items-center gap-2 mb-3">
-        <button onClick={() => exportPdf('single')} className="bg-gray-800 text-white px-3 py-2 rounded">Export PDF (Single)</button>
-        <button onClick={() => exportPdf('grid')} className="bg-gray-800 text-white px-3 py-2 rounded">Export PDF (Grid)</button>
+        <button 
+          onClick={() => exportPdf('single')} 
+          disabled={exporting !== null}
+          className="bg-gray-800 text-white px-3 py-2 rounded disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {exporting === 'single' && (
+            <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          )}
+          {exporting === 'single' ? 'Generating...' : 'Export PDF (Single)'}
+        </button>
+        <button 
+          onClick={() => exportPdf('grid')} 
+          disabled={exporting !== null}
+          className="bg-gray-800 text-white px-3 py-2 rounded disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {exporting === 'grid' && (
+            <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+            </svg>
+          )}
+          {exporting === 'grid' ? 'Generating...' : 'Export PDF (Grid)'}
+        </button>
       </div>
       <ReceiptList scope="manager" />
     </div>
@@ -303,6 +336,7 @@ function CalendarPanel() {
   const [officers, setOfficers] = React.useState<Array<{ id: string; name: string; email: string }>>([])
   const [selected, setSelected] = React.useState<string>('')
   const [monthStart, setMonthStart] = React.useState(() => new Date(new Date().getFullYear(), new Date().getMonth(), 1))
+  const [exportingPdf, setExportingPdf] = React.useState(false)
 
   const load = React.useCallback(async () => {
     const url = `${import.meta.env.VITE_SUPABASE_URL}/rest/v1/users?select=id,name,email,role&order=created_at.desc`
@@ -396,23 +430,33 @@ function CalendarPanel() {
 
   const exportPdf = async () => {
     if (!selected) return
-    const payload = { mode: 'single', filters: { user_id: selected, status: 'missing', date_from: fmt(monthFirst), date_to: fmt(monthLast) } }
-    const { supabase } = await import('../shared/supabaseClient')
-    const { data: sessionData } = await supabase.auth.getSession()
-    const token = sessionData.session?.access_token
-    const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-pdf`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-      body: JSON.stringify(payload),
-    })
-    if (!res.ok) { alert('PDF export failed'); return }
-    const blob = await res.blob()
-    const a = document.createElement('a')
-    const name = officerById(selected)?.name?.replace(/\s+/g,'_') || 'officer'
-    a.download = `missing_${name}_${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,'0')}.pdf`
-    a.href = URL.createObjectURL(blob)
-    a.click()
-    URL.revokeObjectURL(a.href)
+    try {
+      setExportingPdf(true)
+      const payload = { mode: 'single', filters: { user_id: selected, status: 'missing', date_from: fmt(monthFirst), date_to: fmt(monthLast) } }
+      const { supabase } = await import('../shared/supabaseClient')
+      const { data: sessionData } = await supabase.auth.getSession()
+      const token = sessionData.session?.access_token
+      const res = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/generate-pdf`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify(payload),
+      })
+      if (!res.ok) {
+        const text = await res.text()
+        throw new Error(text || 'PDF export failed')
+      }
+      const blob = await res.blob()
+      const a = document.createElement('a')
+      const name = officerById(selected)?.name?.replace(/\s+/g,'_') || 'officer'
+      a.download = `missing_${name}_${monthStart.getFullYear()}-${String(monthStart.getMonth()+1).padStart(2,'0')}.pdf`
+      a.href = URL.createObjectURL(blob)
+      a.click()
+      URL.revokeObjectURL(a.href)
+    } catch (err: any) {
+      alert(`PDF export failed: ${err?.message || 'Unknown error'}`)
+    } finally {
+      setExportingPdf(false)
+    }
   }
 
   return (
@@ -428,7 +472,19 @@ function CalendarPanel() {
           <div className="min-w-[10ch] text-center font-medium">{label}</div>
           <button onClick={()=>changeMonth(1)} className="px-3 py-1.5 rounded border">Next</button>
           <button onClick={exportCsv} className="ml-2 px-3 py-1.5 rounded border border-blue-600 text-blue-700 hover:bg-blue-50">Export CSV</button>
-          <button onClick={exportPdf} className="px-3 py-1.5 rounded border border-gray-800 text-gray-900 hover:bg-gray-50">Missing PDF</button>
+          <button 
+            onClick={exportPdf} 
+            disabled={exportingPdf}
+            className="px-3 py-1.5 rounded border border-gray-800 text-gray-900 hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed flex items-center gap-2"
+          >
+            {exportingPdf && (
+              <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+              </svg>
+            )}
+            {exportingPdf ? 'Generating...' : 'Missing PDF'}
+          </button>
         </div>
       </div>
       {selected ? (
