@@ -83,18 +83,22 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
       ctx.drawImage(v, 0, 0, c.width, c.height)
       addLog('info', `Captured frame: ${c.width}x${c.height}px`)
 
-      // Scale up small images for better OCR (receipts often have small text)
-      const targetWidth = Math.max(1600, c.width)
+      // Scale to optimal size for OCR (too large can amplify noise)
+      const targetWidth = Math.max(1400, Math.min(1800, c.width))
       work = scaleCanvas(c, targetWidth)
       addLog('info', `Scaled to: ${work.width}x${work.height}px`)
       
-      // Apply sharpening to enhance edges
-      work = sharpenImage(work)
-      addLog('info', 'Applied sharpening')
+      // Denoise first (remove moiré patterns and thermal receipt noise)
+      work = denoiseImage(work)
+      addLog('info', 'Applied denoising')
       
-      // Adaptive thresholding for better OCR
-      const bin = adaptiveThreshold(work, 32, 8)
-      addLog('info', 'Applied binarization')
+      // Increase contrast before binarization
+      work = enhanceContrast(work, 1.8)
+      addLog('info', 'Enhanced contrast')
+      
+      // Use Otsu's method for better thresholding on thermal receipts
+      const bin = otsuThreshold(work)
+      addLog('info', 'Applied Otsu binarization')
 
       // OCR via shared worker with timeout
       const ocrBlob = await canvasToBlob(bin, 'image/png')
@@ -392,14 +396,17 @@ async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) =>
           addLog?.('info', `OCR: ${m.status}`)
         }
       },
-      tessedit_pageseg_mode: '4', // Single column of text (better for receipts than '6')
-      preserve_interword_spaces: '1',
+      // Optimal settings for thermal receipt OCR
+      tessedit_pageseg_mode: '6', // Uniform block of text (best for receipts)
       tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#@()' ",
-      // Enhanced Tesseract parameters for receipt OCR
-      tessedit_enable_dict_correction: '0', // Disable dictionary (receipts have non-dictionary words)
-      classify_bln_numeric_mode: '1', // Better number recognition
-      tessedit_do_invert: '0', // Don't invert (already handled in preprocessing)
-      edges_use_new_outline_complexity: '1', // Better edge detection
+      preserve_interword_spaces: '1',
+      tessedit_enable_dict_correction: '0', // Disable dictionary for brand names/station names
+      classify_bln_numeric_mode: '1', // Enhanced number recognition for prices/amounts
+      tessedit_ocr_engine_mode: '1', // Use LSTM OCR engine (more accurate)
+      // Thermal receipt specific settings
+      textord_heavy_nr: '1', // Better handling of noise
+      edges_max_children_per_outline: '40', // Better character boundary detection
+      textord_min_linesize: '1.25', // Adjust for small text on receipts
     })
     
     const words = (result.data?.words || []).map((w: any) => ({ 
@@ -439,40 +446,129 @@ function scaleCanvas(src: HTMLCanvasElement, targetWidth: number): HTMLCanvasEle
   return dst
 }
 
-// Sharpen image using unsharp mask to enhance text edges
-function sharpenImage(src: HTMLCanvasElement): HTMLCanvasElement {
+// Denoise image using median filter to remove moiré patterns and thermal noise
+function denoiseImage(src: HTMLCanvasElement): HTMLCanvasElement {
   const w = src.width, h = src.height
   const ctx = src.getContext('2d')!
   const img = ctx.getImageData(0, 0, w, h)
   const data = img.data
   const out = new Uint8ClampedArray(data.length)
   
-  // Unsharp mask kernel (sharpening)
-  const kernel = [
-    0, -1, 0,
-    -1, 5, -1,
-    0, -1, 0
-  ]
+  // Convert to grayscale first
+  const gray = new Uint8ClampedArray(w * h)
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    gray[p] = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2])
+  }
   
-  for (let y = 1; y < h - 1; y++) {
-    for (let x = 1; x < w - 1; x++) {
-      for (let c = 0; c < 3; c++) { // RGB channels
-        let sum = 0
-        sum += data[((y-1) * w + x) * 4 + c] * kernel[1]
-        sum += data[(y * w + (x-1)) * 4 + c] * kernel[3]
-        sum += data[(y * w + x) * 4 + c] * kernel[4]
-        sum += data[(y * w + (x+1)) * 4 + c] * kernel[5]
-        sum += data[((y+1) * w + x) * 4 + c] * kernel[7]
-        
-        out[(y * w + x) * 4 + c] = Math.min(255, Math.max(0, sum))
+  // 3x3 median filter (good for removing noise while preserving edges)
+  const radius = 1
+  for (let y = radius; y < h - radius; y++) {
+    for (let x = radius; x < w - radius; x++) {
+      const neighbors: number[] = []
+      for (let dy = -radius; dy <= radius; dy++) {
+        for (let dx = -radius; dx <= radius; dx++) {
+          neighbors.push(gray[(y + dy) * w + (x + dx)])
+        }
       }
-      out[(y * w + x) * 4 + 3] = 255 // Alpha
+      neighbors.sort((a, b) => a - b)
+      const median = neighbors[Math.floor(neighbors.length / 2)]
+      const idx = y * w + x
+      out[idx * 4] = median
+      out[idx * 4 + 1] = median
+      out[idx * 4 + 2] = median
+      out[idx * 4 + 3] = 255
     }
   }
   
-  // Copy sharpened data back
+  // Copy denoised data
   for (let i = 0; i < data.length; i++) {
     if (out[i] !== 0) data[i] = out[i]
+  }
+  
+  ctx.putImageData(img, 0, 0)
+  return src
+}
+
+// Enhance contrast using histogram stretching
+function enhanceContrast(src: HTMLCanvasElement, factor: number): HTMLCanvasElement {
+  const ctx = src.getContext('2d')!
+  const img = ctx.getImageData(0, 0, src.width, src.height)
+  const data = img.data
+  
+  // Find min and max values
+  let min = 255, max = 0
+  for (let i = 0; i < data.length; i += 4) {
+    const gray = 0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2]
+    if (gray < min) min = gray
+    if (gray > max) max = gray
+  }
+  
+  // Stretch histogram with factor
+  const range = max - min
+  if (range > 0) {
+    for (let i = 0; i < data.length; i += 4) {
+      for (let c = 0; c < 3; c++) {
+        const normalized = (data[i + c] - min) / range
+        const stretched = Math.pow(normalized, 1 / factor)
+        data[i + c] = Math.min(255, Math.max(0, stretched * 255))
+      }
+    }
+  }
+  
+  ctx.putImageData(img, 0, 0)
+  return src
+}
+
+// Otsu's method for automatic threshold detection (better for thermal receipts)
+function otsuThreshold(src: HTMLCanvasElement): HTMLCanvasElement {
+  const w = src.width, h = src.height
+  const ctx = src.getContext('2d')!
+  const img = ctx.getImageData(0, 0, w, h)
+  const data = img.data
+  
+  // Build histogram
+  const histogram = new Array(256).fill(0)
+  const gray = new Uint8ClampedArray(w * h)
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const g = Math.round(0.299 * data[i] + 0.587 * data[i+1] + 0.114 * data[i+2])
+    gray[p] = g
+    histogram[g]++
+  }
+  
+  // Calculate Otsu threshold
+  const total = w * h
+  let sum = 0
+  for (let i = 0; i < 256; i++) sum += i * histogram[i]
+  
+  let sumB = 0, wB = 0, wF = 0
+  let maxVariance = 0
+  let threshold = 0
+  
+  for (let t = 0; t < 256; t++) {
+    wB += histogram[t]
+    if (wB === 0) continue
+    
+    wF = total - wB
+    if (wF === 0) break
+    
+    sumB += t * histogram[t]
+    const mB = sumB / wB
+    const mF = (sum - sumB) / wF
+    const variance = wB * wF * (mB - mF) * (mB - mF)
+    
+    if (variance > maxVariance) {
+      maxVariance = variance
+      threshold = t
+    }
+  }
+  
+  // Apply threshold
+  for (let i = 0, p = 0; i < data.length; i += 4, p++) {
+    const binary = gray[p] > threshold ? 255 : 0
+    data[i] = binary
+    data[i+1] = binary
+    data[i+2] = binary
+    data[i+3] = 255
   }
   
   ctx.putImageData(img, 0, 0)
