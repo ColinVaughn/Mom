@@ -6,16 +6,20 @@ import { useAuth } from '../shared/AuthContext'
 import ReceiptList from '../widgets/ReceiptList'
 import BulkZipUpload from '../widgets/BulkZipUpload'
 import { enqueueUpload } from '../shared/offlineQueue'
+import CardManagement from '../widgets/CardManagement'
 
 export default function OfficerDashboard() {
-  const [tab, setTab] = React.useState<'upload'|'history'>('upload')
+  const [tab, setTab] = React.useState<'upload'|'history'|'settings'>('upload')
   return (
     <div className="mx-auto max-w-5xl p-4">
       <div className="inline-flex rounded-lg border bg-white shadow-sm overflow-hidden mb-4">
         <button className={tabBtn(tab==='upload')} onClick={() => setTab('upload')} aria-pressed={tab==='upload'}>Upload</button>
         <button className={tabBtn(tab==='history')} onClick={() => setTab('history')} aria-pressed={tab==='history'}>History</button>
+        <button className={tabBtn(tab==='settings')} onClick={() => setTab('settings')} aria-pressed={tab==='settings'}>Settings</button>
       </div>
-      {tab === 'upload' ? <UploadPanel /> : <HistoryPanel />}
+      {tab === 'upload' && <UploadPanel />}
+      {tab === 'history' && <HistoryPanel />}
+      {tab === 'settings' && <SettingsPanel />}
     </div>
   )
 }
@@ -272,6 +276,14 @@ function HistoryPanel() {
   return (
     <div>
       <ReceiptList scope="officer" />
+    </div>
+  )
+}
+
+function SettingsPanel() {
+  return (
+    <div>
+      <CardManagement />
     </div>
   )
 }

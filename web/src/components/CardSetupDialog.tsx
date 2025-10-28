@@ -167,7 +167,7 @@ export default function CardSetupDialog() {
           </form>
 
           <p className="text-xs text-gray-500">
-            You can add or update your card information later in your profile settings.
+            You can add or update your card information later by going to <strong>Officer Dashboard → Settings</strong>.
           </p>
         </div>
       </div>

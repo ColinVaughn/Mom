@@ -4,14 +4,15 @@ import ReconcilePanel from '../widgets/ReconcilePanel'
 import { useAuth } from '../shared/AuthContext'
 import { callEdgeFunctionJson } from '../shared/api'
 import OfficerCalendar from '../widgets/OfficerCalendar'
+import CardManagement from '../widgets/CardManagement'
 import { Chart, BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement, LineElement } from 'chart.js'
 
 Chart.register(BarController, BarElement, CategoryScale, LinearScale, Tooltip, Legend, Title, LineController, PointElement, LineElement)
 
 export default function ManagerDashboard() {
-  const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'|'reconcile'>('receipts')
+  const [tab, setTab] = React.useState<'receipts'|'users'|'analytics'|'calendar'|'reconcile'|'settings'>('receipts')
 
-  const valid = new Set(['receipts','users','analytics','calendar','reconcile'])
+  const valid = new Set(['receipts','users','analytics','calendar','reconcile','settings'])
   const applyHash = React.useCallback(() => {
     const h = (window.location.hash || '').replace(/^#/,'')
     if (valid.has(h)) setTab(h as any)
@@ -24,7 +25,7 @@ export default function ManagerDashboard() {
     return () => window.removeEventListener('hashchange', onHash)
   }, [applyHash])
 
-  const selectTab = (t: 'receipts'|'users'|'analytics'|'calendar'|'reconcile') => {
+  const selectTab = (t: 'receipts'|'users'|'analytics'|'calendar'|'reconcile'|'settings') => {
     setTab(t)
     try { window.location.hash = t } catch {}
   }
@@ -36,12 +37,14 @@ export default function ManagerDashboard() {
         <button className={tabBtn(tab==='analytics')} onClick={() => selectTab('analytics')}>Analytics</button>
         <button className={tabBtn(tab==='calendar')} onClick={() => selectTab('calendar')}>Calendar</button>
         <button className={tabBtn(tab==='reconcile')} onClick={() => selectTab('reconcile')}>Reconcile</button>
+        <button className={tabBtn(tab==='settings')} onClick={() => selectTab('settings')}>Settings</button>
       </div>
       {tab === 'receipts' && <ReceiptsPanel />}
       {tab === 'users' && <UsersPanel />}
       {tab === 'analytics' && <AnalyticsPanel />}
       {tab === 'calendar' && <CalendarPanel />}
       {tab === 'reconcile' && <ReconcilePanel />}
+      {tab === 'settings' && <SettingsPanel />}
     </div>
   )
 }
@@ -988,6 +991,14 @@ function AnalyticsPanel() {
       </div>
 
       {loading && <div className="text-sm text-gray-600">Loading…</div>}
+    </div>
+  )
+}
+
+function SettingsPanel() {
+  return (
+    <div>
+      <CardManagement />
     </div>
   )
 }
