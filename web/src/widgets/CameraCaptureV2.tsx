@@ -31,6 +31,8 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
   const [uploadBlob, setUploadBlob] = React.useState<Blob | null>(null)
   const [extracted, setExtracted] = React.useState<GasReceiptData | null>(null)
   const [ocrProgress, setOcrProgress] = React.useState<number>(0)
+  const [debugLogs, setDebugLogs] = React.useState<Array<{time: string, type: 'info'|'error'|'success', msg: string}>>([])
+  const [showDebugModal, setShowDebugModal] = React.useState(false)
 
   React.useEffect(() => {
     let stream: MediaStream | null = null
@@ -57,12 +59,20 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
     }
   }, [onError])
 
+  const addLog = React.useCallback((type: 'info'|'error'|'success', msg: string) => {
+    const time = new Date().toLocaleTimeString()
+    setDebugLogs(prev => [...prev, { time, type, msg }])
+    console.log(`[${type.toUpperCase()}] ${msg}`)
+  }, [])
+
   const captureAndExtract = async () => {
     if (!videoRef.current || !canvasRef.current) return
     setBusy(true)
     setError('') // Clear previous errors
+    setDebugLogs([]) // Clear previous logs
     let work: HTMLCanvasElement | null = null
     try {
+      addLog('info', 'Starting capture...')
       // Draw frame
       const v = videoRef.current
       const c = canvasRef.current
@@ -70,56 +80,74 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
       c.height = v.videoHeight
       const ctx = c.getContext('2d')!
       ctx.drawImage(v, 0, 0, c.width, c.height)
+      addLog('info', `Captured frame: ${c.width}x${c.height}px`)
 
       // Downscale to reasonable working width to speed OCR
       work = scaleCanvas(c, Math.min(1400, c.width))
+      addLog('info', `Scaled to: ${work.width}x${work.height}px`)
       // Adaptive thresholding for better OCR
       const bin = adaptiveThreshold(work, 32, 8)
+      addLog('info', 'Applied image enhancement')
 
       // OCR via shared worker with timeout
       const ocrBlob = await canvasToBlob(bin, 'image/png')
-      console.log('[OCR] Starting recognition...')
+      addLog('info', `Created OCR blob: ${ocrBlob.size} bytes`)
+      addLog('info', 'Starting OCR recognition...')
       setOcrProgress(0)
       
       const ocrPromise = recognizeWithWorker(ocrBlob, (progress) => {
         setOcrProgress(Math.round(progress * 100))
-      })
+        if (progress > 0 && progress < 1 && Math.round(progress * 100) % 20 === 0) {
+          addLog('info', `OCR progress: ${Math.round(progress * 100)}%`)
+        }
+      }, addLog)
       const timeoutPromise = new Promise<never>((_, reject) => {
         setTimeout(() => reject(new Error('OCR timeout after 30 seconds')), 30000)
       })
       
       const { resultText, overallConfidence, words } = await Promise.race([ocrPromise, timeoutPromise])
-      console.log('[OCR] Recognition complete, confidence:', overallConfidence)
+      addLog('success', `OCR complete! Confidence: ${Math.round(overallConfidence)}%`)
+      addLog('info', `Extracted ${words.length} words from receipt`)
       setOcrProgress(100)
 
       const data = extractFields(resultText, words, overallConfidence)
+      addLog('success', `Parsed fields: ${Object.keys(data).filter(k => data[k as keyof GasReceiptData] && k !== 'confidence' && k !== 'fieldConfidence').join(', ') || 'none'}`)
 
       // Final image for upload (JPEG, quality 0.95) and preview
       const outBlob = await canvasToBlob(work, 'image/jpeg', 0.95)
+      addLog('info', 'Image ready for upload')
       const url = URL.createObjectURL(outBlob)
       setPreviewUrl(url)
       setUploadBlob(outBlob)
       setExtracted(data)
     } catch (e: any) {
-      console.error('[OCR] Error:', e)
       const msg = e?.message || 'Failed to capture'
+      addLog('error', msg)
+      addLog('error', e?.stack || 'No stack trace available')
       
       // If OCR failed but we have an image, allow manual entry
       if (work) {
         try {
+          addLog('info', 'Attempting to save image despite OCR failure...')
           const outBlob = await canvasToBlob(work, 'image/jpeg', 0.95)
           const url = URL.createObjectURL(outBlob)
           setPreviewUrl(url)
           setUploadBlob(outBlob)
           setExtracted({ confidence: 0 }) // Empty data for manual entry
           setError(`OCR failed: ${msg}. Please enter details manually.`)
-        } catch {
+          addLog('info', 'Image saved. Manual entry enabled.')
+          setShowDebugModal(true) // Auto-show debug modal on error
+        } catch (fallbackErr: any) {
+          const fallbackMsg = fallbackErr?.message || 'Unknown error'
+          addLog('error', `Fallback failed: ${fallbackMsg}`)
           setError(msg)
           onError?.(msg)
+          setShowDebugModal(true)
         }
       } else {
         setError(msg)
         onError?.(msg)
+        setShowDebugModal(true)
       }
     } finally {
       setBusy(false)
@@ -245,57 +273,122 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
         >
           {busy ? (ocrProgress > 0 ? `Processing OCR: ${ocrProgress}%` : 'Processing…') : 'Capture & Extract'}
         </button>
+        {debugLogs.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setShowDebugModal(true)}
+            className="px-3 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+            title="View debug logs"
+          >
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+          </button>
+        )}
       </div>
       <div className="text-xs text-gray-600 text-center">Good lighting helps OCR. Hold receipt flat.</div>
+      
+      {/* Debug Modal */}
+      {showDebugModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50" onClick={() => setShowDebugModal(false)}>
+          <div className="bg-white rounded-lg shadow-xl max-w-2xl w-full max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between p-4 border-b">
+              <h3 className="font-semibold text-lg">Debug Logs</h3>
+              <button
+                onClick={() => setShowDebugModal(false)}
+                className="text-gray-500 hover:text-gray-700 p-1"
+              >
+                <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            <div className="overflow-auto p-4 flex-1 font-mono text-xs space-y-1">
+              {debugLogs.map((log, i) => (
+                <div key={i} className={`p-2 rounded ${
+                  log.type === 'error' ? 'bg-red-50 text-red-800' : 
+                  log.type === 'success' ? 'bg-green-50 text-green-800' : 
+                  'bg-gray-50 text-gray-700'
+                }`}>
+                  <span className="text-gray-500">[{log.time}]</span> <span className="font-semibold uppercase">{log.type}:</span> {log.msg}
+                </div>
+              ))}
+              {debugLogs.length === 0 && (
+                <div className="text-gray-500 text-center py-8">No logs yet</div>
+              )}
+            </div>
+            <div className="p-4 border-t flex gap-2">
+              <button
+                onClick={() => {
+                  const logText = debugLogs.map(l => `[${l.time}] ${l.type.toUpperCase()}: ${l.msg}`).join('\n')
+                  navigator.clipboard.writeText(logText).then(() => alert('Logs copied to clipboard!'))
+                }}
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              >
+                Copy Logs
+              </button>
+              <button
+                onClick={() => setShowDebugModal(false)}
+                className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
 
 // ---------- OCR Pipeline ----------
 
-async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) => void): Promise<{ resultText: string; overallConfidence: number; words: Array<{ text: string; confidence: number }>}> {
+async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) => void, addLog?: (type: 'info'|'error'|'success', msg: string) => void): Promise<{ resultText: string; overallConfidence: number; words: Array<{ text: string; confidence: number }>}> {
   try {
-    console.log('[OCR] Importing tesseract.js...')
+    addLog?.('info', 'Importing tesseract.js library...')
     const { createWorker } = await import('tesseract.js')
     
     // Reuse a singleton worker stored on window to avoid reloading between captures
     const g: any = globalThis as any
     if (!g.__grts_ocr_worker__) {
-      console.log('[OCR] Creating new worker...')
+      addLog?.('info', 'Creating new OCR worker (first time setup)...')
       const worker = await createWorker({ 
         logger: (m: any) => {
           if (m.status === 'recognizing text') {
-            console.log(`[OCR] Progress: ${Math.round(m.progress * 100)}%`)
             onProgress?.(m.progress)
-          } else {
-            console.log('[OCR]', m.status)
+          } else if (m.status) {
+            addLog?.('info', `OCR: ${m.status}`)
           }
         }
       })
-      console.log('[OCR] Loading language...')
+      addLog?.('info', 'Loading English language data...')
       await worker.loadLanguage('eng')
-      console.log('[OCR] Initializing...')
+      addLog?.('info', 'Initializing OCR engine...')
       await worker.initialize('eng')
-      console.log('[OCR] Setting parameters...')
+      addLog?.('info', 'Configuring OCR parameters...')
       await worker.setParameters({
         tessedit_pageseg_mode: '6', // Assume a uniform block of text
         preserve_interword_spaces: '1',
         tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#()' ",
       })
-      console.log('[OCR] Worker ready')
+      addLog?.('success', 'OCR worker ready!')
       g.__grts_ocr_worker__ = worker
     } else {
-      console.log('[OCR] Reusing existing worker')
+      addLog?.('info', 'Reusing existing OCR worker')
     }
     
     const worker = g.__grts_ocr_worker__
-    console.log('[OCR] Starting recognition on image blob, size:', img.size)
+    addLog?.('info', `Processing image (${img.size} bytes)...`)
     const { data } = await worker.recognize(img)
     const words = (data?.words || []).map((w: any) => ({ text: String(w.text || ''), confidence: Number(w.confidence || 0) }))
     return { resultText: String(data?.text || ''), overallConfidence: Number(data?.confidence || 0), words }
   } catch (err) {
-    console.error('[OCR] Worker error:', err)
-    throw new Error(`OCR failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
+    const errorMsg = err instanceof Error ? err.message : 'Unknown error'
+    addLog?.('error', `OCR worker failed: ${errorMsg}`)
+    if (err instanceof Error && err.stack) {
+      addLog?.('error', `Stack: ${err.stack.slice(0, 200)}...`)
+    }
+    throw new Error(`OCR failed: ${errorMsg}`)
   }
 }
 
