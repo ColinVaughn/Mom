@@ -30,6 +30,7 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
   const [previewUrl, setPreviewUrl] = React.useState<string | null>(null)
   const [uploadBlob, setUploadBlob] = React.useState<Blob | null>(null)
   const [extracted, setExtracted] = React.useState<GasReceiptData | null>(null)
+  const [ocrProgress, setOcrProgress] = React.useState<number>(0)
 
   React.useEffect(() => {
     let stream: MediaStream | null = null
@@ -59,6 +60,8 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
   const captureAndExtract = async () => {
     if (!videoRef.current || !canvasRef.current) return
     setBusy(true)
+    setError('') // Clear previous errors
+    let work: HTMLCanvasElement | null = null
     try {
       // Draw frame
       const v = videoRef.current
@@ -69,13 +72,25 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
       ctx.drawImage(v, 0, 0, c.width, c.height)
 
       // Downscale to reasonable working width to speed OCR
-      const work = scaleCanvas(c, Math.min(1400, c.width))
+      work = scaleCanvas(c, Math.min(1400, c.width))
       // Adaptive thresholding for better OCR
       const bin = adaptiveThreshold(work, 32, 8)
 
-      // OCR via shared worker
+      // OCR via shared worker with timeout
       const ocrBlob = await canvasToBlob(bin, 'image/png')
-      const { resultText, overallConfidence, words } = await recognizeWithWorker(ocrBlob)
+      console.log('[OCR] Starting recognition...')
+      setOcrProgress(0)
+      
+      const ocrPromise = recognizeWithWorker(ocrBlob, (progress) => {
+        setOcrProgress(Math.round(progress * 100))
+      })
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('OCR timeout after 30 seconds')), 30000)
+      })
+      
+      const { resultText, overallConfidence, words } = await Promise.race([ocrPromise, timeoutPromise])
+      console.log('[OCR] Recognition complete, confidence:', overallConfidence)
+      setOcrProgress(100)
 
       const data = extractFields(resultText, words, overallConfidence)
 
@@ -86,11 +101,29 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
       setUploadBlob(outBlob)
       setExtracted(data)
     } catch (e: any) {
+      console.error('[OCR] Error:', e)
       const msg = e?.message || 'Failed to capture'
-      setError(msg)
-      onError?.(msg)
+      
+      // If OCR failed but we have an image, allow manual entry
+      if (work) {
+        try {
+          const outBlob = await canvasToBlob(work, 'image/jpeg', 0.95)
+          const url = URL.createObjectURL(outBlob)
+          setPreviewUrl(url)
+          setUploadBlob(outBlob)
+          setExtracted({ confidence: 0 }) // Empty data for manual entry
+          setError(`OCR failed: ${msg}. Please enter details manually.`)
+        } catch {
+          setError(msg)
+          onError?.(msg)
+        }
+      } else {
+        setError(msg)
+        onError?.(msg)
+      }
     } finally {
       setBusy(false)
+      setOcrProgress(0)
     }
   }
 
@@ -111,9 +144,11 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
 
     return (
       <div className="space-y-4">
+        {error && <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">{error}</div>}
+        
         <div className="relative">
           <img src={previewUrl} alt="Receipt preview" className="w-full rounded border" />
-          {extracted.confidence != null && (
+          {extracted.confidence != null && extracted.confidence > 0 && (
             <div className="absolute top-2 right-2 bg-white/90 px-2 py-1 rounded shadow text-xs">
               Overall: {Math.round(extracted.confidence)}%
             </div>
@@ -121,7 +156,7 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
         </div>
 
         <div className="bg-gray-50 p-3 rounded border">
-          <h3 className="font-semibold mb-2">Review extracted data</h3>
+          <h3 className="font-semibold mb-2">{extracted.confidence === 0 ? 'Enter receipt details' : 'Review extracted data'}</h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
             <label className="block">
               <span className="block text-gray-600">Date {badge(getConf('date'))}</span>
@@ -208,7 +243,7 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
           disabled={!ready || busy}
           className="flex-1 bg-blue-600 text-white px-4 py-2 rounded-lg disabled:bg-gray-400 hover:bg-blue-700"
         >
-          {busy ? 'Processing…' : 'Capture & Extract'}
+          {busy ? (ocrProgress > 0 ? `Processing OCR: ${ocrProgress}%` : 'Processing…') : 'Capture & Extract'}
         </button>
       </div>
       <div className="text-xs text-gray-600 text-center">Good lighting helps OCR. Hold receipt flat.</div>
@@ -218,25 +253,50 @@ export default function CameraCaptureV2({ onCapture, onError }: Props) {
 
 // ---------- OCR Pipeline ----------
 
-async function recognizeWithWorker(img: Blob): Promise<{ resultText: string; overallConfidence: number; words: Array<{ text: string; confidence: number }>}> {
-  const { createWorker } = await import('tesseract.js')
-  // Reuse a singleton worker stored on window to avoid reloading between captures
-  const g: any = globalThis as any
-  if (!g.__grts_ocr_worker__) {
-    const worker = await createWorker({ logger: () => {} })
-    await worker.loadLanguage('eng')
-    await worker.initialize('eng')
-    await worker.setParameters({
-      tessedit_pageseg_mode: '6', // Assume a uniform block of text
-      preserve_interword_spaces: '1',
-      tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#()' ",
-    })
-    g.__grts_ocr_worker__ = worker
+async function recognizeWithWorker(img: Blob, onProgress?: (progress: number) => void): Promise<{ resultText: string; overallConfidence: number; words: Array<{ text: string; confidence: number }>}> {
+  try {
+    console.log('[OCR] Importing tesseract.js...')
+    const { createWorker } = await import('tesseract.js')
+    
+    // Reuse a singleton worker stored on window to avoid reloading between captures
+    const g: any = globalThis as any
+    if (!g.__grts_ocr_worker__) {
+      console.log('[OCR] Creating new worker...')
+      const worker = await createWorker({ 
+        logger: (m: any) => {
+          if (m.status === 'recognizing text') {
+            console.log(`[OCR] Progress: ${Math.round(m.progress * 100)}%`)
+            onProgress?.(m.progress)
+          } else {
+            console.log('[OCR]', m.status)
+          }
+        }
+      })
+      console.log('[OCR] Loading language...')
+      await worker.loadLanguage('eng')
+      console.log('[OCR] Initializing...')
+      await worker.initialize('eng')
+      console.log('[OCR] Setting parameters...')
+      await worker.setParameters({
+        tessedit_pageseg_mode: '6', // Assume a uniform block of text
+        preserve_interword_spaces: '1',
+        tessedit_char_whitelist: "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz.,/:$-*#()' ",
+      })
+      console.log('[OCR] Worker ready')
+      g.__grts_ocr_worker__ = worker
+    } else {
+      console.log('[OCR] Reusing existing worker')
+    }
+    
+    const worker = g.__grts_ocr_worker__
+    console.log('[OCR] Starting recognition on image blob, size:', img.size)
+    const { data } = await worker.recognize(img)
+    const words = (data?.words || []).map((w: any) => ({ text: String(w.text || ''), confidence: Number(w.confidence || 0) }))
+    return { resultText: String(data?.text || ''), overallConfidence: Number(data?.confidence || 0), words }
+  } catch (err) {
+    console.error('[OCR] Worker error:', err)
+    throw new Error(`OCR failed: ${err instanceof Error ? err.message : 'Unknown error'}`)
   }
-  const worker = g.__grts_ocr_worker__
-  const { data } = await worker.recognize(img)
-  const words = (data?.words || []).map((w: any) => ({ text: String(w.text || ''), confidence: Number(w.confidence || 0) }))
-  return { resultText: String(data?.text || ''), overallConfidence: Number(data?.confidence || 0), words }
 }
 
 function scaleCanvas(src: HTMLCanvasElement, maxWidth: number): HTMLCanvasElement {
